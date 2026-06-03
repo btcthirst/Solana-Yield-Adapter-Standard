@@ -117,7 +117,12 @@ PDA для `RegistryEntry`: `[b"registry_entry", adapter_program_id]`
 - [ ] Перевірка: `entry.is_active == true && entry.is_paused == false`
 - [ ] Перевірка: `entry.adapter_program_id == передана програма`
 - [ ] Cross-program account read (не CPI — просто читання акаунта через `AccountInfo`)
-- [ ] Додати `registry_entry: Account<RegistryEntry>` до кожного `#[derive(Accounts)]` у Dispatcher
+- [ ] Додати `registry_entry: Account<RegistryEntry>` до кожного `#[derive(Accounts)]` у Dispatcher з `owner` constraint:
+  ```rust
+  #[account(owner = REGISTRY_PROGRAM_ID @ AdapterError::AdapterNotRegistered)]
+  pub registry_entry: Account<'info, RegistryEntry>,
+  ```
+  Без `owner` constraint — атакуючий може підсунути фейковий акаунт з `is_active = true`.
 
 ### Крок 7 — Devnet deploy (день 6–7)
 - [ ] `NO_DNA=1 anchor deploy --provider.cluster devnet`
@@ -171,6 +176,13 @@ SPL Governance + voting — поза scope цього проекту.
 ---
 
 ## Events для indexing
+
+> **Тип конвертація у events:** `RegistryEntry` зберігає `protocol: [u8; 64]`, але events використовують `String` для зручності indexing. При emit потрібна явна конвертація:
+> ```rust
+> let protocol = String::from_utf8_lossy(&entry.protocol)
+>     .trim_end_matches('\0').to_string();
+> emit!(AdapterApproved { protocol, ... });
+> ```
 
 ```rust
 #[event]

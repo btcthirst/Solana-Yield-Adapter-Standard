@@ -100,8 +100,9 @@ pub struct Deposit<'info> {
     /// CHECK: USDC bank, verified as writable by MarginFi program
     #[account(mut)]
     pub bank: AccountInfo<'info>,
+    /// CHECK: user USDC ATA (source), verified by token program during transfer
     #[account(mut)]
-    pub signer_token_account: AccountInfo<'info>, // user USDC ATA (source)
+    pub signer_token_account: AccountInfo<'info>,
     /// CHECK: MarginFi vault (destination), verified by MarginFi program
     #[account(mut)]
     pub bank_liquidity_vault: AccountInfo<'info>,
@@ -157,8 +158,15 @@ pub fn current_value(ctx: Context<CurrentValue>) -> Result<()> {
 - [ ] `u64::try_from` замість `as u64` — поверне error замість panic при overflow
 
 ### Крок 6 — Ініціалізація (день 4–5)
-- [ ] `initialize_position(user: Pubkey)` — створює `UserPosition` PDA (Dispatcher) і `MarginfiAdapterPosition` PDA (адаптер)
-- [ ] `initialize_marginfi_account` — CPI до MarginFi для створення `MarginfiAccount`; викликається один раз через `initialize_position`
+
+> **Два окремих виклики перед першим deposit (різні програми):**
+> 1. `dispatcher::initialize_position(adapter: Pubkey)` — створює `UserPosition` PDA у **Dispatcher** (seeds: `[b"position", user.key, adapter.key]`)
+> 2. `marginfi_adapter::initialize_position()` — створює `MarginfiAdapterPosition` PDA у **MarginFi adapter** та CPI `init_marginfi_account` до MarginFi
+>
+> Жодна програма не може ініціалізувати PDA іншої — це два окремих `initialize_position` від двох різних програм.
+
+- [ ] `dispatcher::initialize_position(adapter)` — seeds `[b"position", user.key, adapter.key]`
+- [ ] `marginfi_adapter::initialize_position()` — seeds `[b"marginfi_position", user.key, adapter.key]`, CPI `init_marginfi_account`
 - [ ] MarginfiAccount PDA seeds: верифікувати реальні seeds через MarginFi source code (не припускати `[b"marginfi_account", adapter_program_id]`)
 - [ ] Перевірити `if marginfi_account.data_is_empty() { initialize }` перед CPI deposit
 

@@ -89,6 +89,12 @@ Jupiter Perp використовує власну oracle систему. Два
 ### Крок 3 — Scaffold (день 2)
 - [ ] `programs/adapters/jupiter-lp/`
 - [ ] Визначити мінімальні structs для десеріалізації Pool та Custody
+- [ ] Створити `adapter_jlp_ata` — **adapter's JLP ATA** (PDA-owned, holds JLP for all users):
+  - Owner: adapter authority PDA (`[b"jupiter_authority"]`)
+  - Mint: JLP Token Mint `27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4`
+  - Ініціалізується **один раз** при деплої, не per-user
+  - `UserPosition.shares` = частка JLP цього user у загальному adapter ATA
+- [ ] Додати `initialize_adapter` інструкцію що створює `adapter_jlp_ata` (викликається при деплої)
 
 ### Крок 4 — Deposit (addLiquidity) інструкція (день 3–5)
 

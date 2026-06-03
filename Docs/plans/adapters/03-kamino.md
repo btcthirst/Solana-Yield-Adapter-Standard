@@ -143,10 +143,13 @@ pub struct Deposit<'info> {
     /// CHECK: Obligation collateral destination
     #[account(mut)]
     pub obligation_collateral_destination: AccountInfo<'info>,
+    /// CHECK: user USDC ATA (source), verified by token program during transfer
     #[account(mut)]
-    pub user_source_liquidity: AccountInfo<'info>, // user USDC ATA
+    pub user_source_liquidity: AccountInfo<'info>,
     #[account(mut)]
     pub user_position: Account<'info, UserPosition>,
+    #[account(mut)]
+    pub kamino_adapter_position: Account<'info, KaminoAdapterPosition>, // obligation reference
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,

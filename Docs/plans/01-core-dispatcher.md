@@ -16,8 +16,8 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()>
     // → пише shares до ctx.accounts.user_position.shares
 
 pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()>
-    // → пише отриманий asset amount до ctx.accounts.user_position.last_withdrawn
-    // → shares = 0 означає "withdraw all"
+    // → оновлює ctx.accounts.user_position.shares (зменшує або до 0)
+    // → shares = 0 означає "withdraw all" + закриває UserPosition PDA (повертає rent)
 
 pub fn current_value(ctx: Context<CurrentValue>) -> Result<()>
     // → sol_set_return_data(&value_u64.to_le_bytes())
@@ -111,7 +111,7 @@ pub struct UserPosition {
 - [ ] `initialize_dispatcher` — ініціалізація dispatcher state
 - [ ] `initialize_position(adapter: Pubkey)` — створює UserPosition PDA для user/adapter пари
 - [ ] `deposit(amount: u64)` — роутинг до адаптера, оновлює `UserPosition.shares`
-- [ ] `withdraw(shares: u64)` — роутинг до адаптера, `shares=0` = повне виведення
+- [ ] `withdraw(shares: u64)` — роутинг до адаптера, `shares=0` = повне виведення та закриття `UserPosition` PDA (повертає rent до `owner`)
 - [ ] `current_value` — роутинг до адаптера, читає return_data після CPI
 
 > **ComputeBudget:** `set_compute_unit_limit` — це НЕ CPI зсередині програми. Це окрема інструкція яку **клієнт** додає першою в транзакцію:
@@ -155,7 +155,6 @@ programs/
 │   │   │   ├── current_value.rs
 │   │   │   └── mod.rs
 │   │   ├── state/
-│   │   │   ├── adapter_config.rs
 │   │   │   ├── user_position.rs
 │   │   │   └── mod.rs
 │   │   ├── error.rs
@@ -164,7 +163,7 @@ programs/
 └── adapter-interface/
     ├── src/
     │   ├── lib.rs
-    │   ├── traits.rs
+    │   ├── convention.rs   — документаційна конвенція (не impl-able trait)
     │   └── types.rs
     └── Cargo.toml
 ```

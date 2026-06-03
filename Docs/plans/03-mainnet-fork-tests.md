@@ -190,6 +190,13 @@ describe("MarginFi Adapter", () => {
 
 ```typescript
 describe("Drift Insurance Fund Adapter", () => {
+  const stakeAmount = 100_000_000n; // 100 USDC
+
+  before(async () => {
+    // Mint USDC перед тестами — аналогічно до MarginFi
+    await mintUsdc(connection, user.publicKey, stakeAmount);
+  });
+
   it("stakes USDC", async () => { ... });
   
   it("requests unstake (initiates cooldown)", async () => {

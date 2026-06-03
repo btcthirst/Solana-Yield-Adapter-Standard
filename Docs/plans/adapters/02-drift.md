@@ -75,12 +75,13 @@ drift = { git = "https://github.com/drift-labs/protocol-v2", features = ["no-ent
   #[account]
   pub struct DriftAdapterPosition {
       pub if_shares: u128,               // u128 — відповідає Drift IF shares type
+      pub market_index: u16,             // USDC = 0 (зберігається для гнучкості)
       pub pending_withdrawal: bool,
       pub withdrawal_request_shares: u128,
       pub withdrawal_request_ts: i64,
       pub bump: u8,
   }
-  // space = 8 + 16 + 1 + 16 + 8 + 1 = 50 bytes
+  // space = 8 + 16 + 2 + 1 + 16 + 8 + 1 = 52 bytes
   // seeds: [b"drift_position", user.key]
   ```
   > **Примітка:** `UserPosition.shares` (Dispatcher) зберігає `u64` для сумісності.
@@ -107,8 +108,9 @@ pub struct Deposit<'info> {
     /// CHECK: InsuranceFundStake PDA for this adapter, verified by Drift
     #[account(mut)]
     pub insurance_fund_stake: AccountInfo<'info>,
+    /// CHECK: user USDC ATA, verified by token program during transfer
     #[account(mut)]
-    pub user_token_account: AccountInfo<'info>, // user USDC ATA
+    pub user_token_account: AccountInfo<'info>,
     #[account(mut)]
     pub user_position: Account<'info, UserPosition>,
     #[account(mut)]
@@ -133,12 +135,12 @@ pub struct Deposit<'info> {
 Стан-машина у `withdraw`:
 ```rust
 pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
-    let pos = &ctx.accounts.drift_adapter_position;
+    let pos = &mut ctx.accounts.drift_adapter_position; // mut — змінюємо стан
+    let now = Clock::get()?.unix_timestamp;             // один виклик до if/else
+    let cooldown = read_cooldown_from_spot_market(&ctx)?; // читає SpotMarket.insurance_fund.unstaking_period
 
     if pos.pending_withdrawal {
         // Крок 2: cooldown пройшов?
-        let now = Clock::get()?.unix_timestamp;
-        let cooldown = read_cooldown_from_spot_market(&ctx)?; // ~13 днів в секундах
         require!(
             now >= pos.withdrawal_request_ts + cooldown,
             AdapterError::CooldownActive
@@ -146,13 +148,14 @@ pub fn withdraw(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
         // Виконати remove
         drift::cpi::remove_insurance_fund_stake(...)?;
         pos.pending_withdrawal = false;
+        emit!(UnstakeCompleted { ... });
     } else {
         // Крок 1: ініціювати request
         drift::cpi::request_remove_insurance_fund_stake(...)?;
         pos.pending_withdrawal = true;
-        pos.withdrawal_request_ts = Clock::get()?.unix_timestamp;
+        pos.withdrawal_request_ts = now;               // використовуємо вже отримане значення
         pos.withdrawal_request_shares = pos.if_shares;
-        emit!(UnstakeRequested { ready_at: pos.withdrawal_request_ts + cooldown });
+        emit!(UnstakeRequested { ready_at: now + cooldown }); // cooldown доступний тут
     }
     Ok(())
 }

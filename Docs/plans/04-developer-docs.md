@@ -370,7 +370,7 @@ ts-node scripts/register-adapter.ts \
 ## Definition of Done
 
 - [ ] SPEC.md: всі три інструкції задокументовані з сигнатурами `Result<()>`, POST-умовами та errors
-- [ ] SPEC.md: account conventions (UserPosition space, ValueResult), event schema, security considerations
+- [ ] SPEC.md: account conventions (UserPosition space, set_return_data/returnData pattern), event schema, security considerations
 - [ ] SPEC.md: пояснення чому `Result<()>` а не `Result<u64>` (Solana VM обмеження)
 - [ ] ADAPTER_GUIDE.md: розробник може пройти від нуля до working adapter
 - [ ] `programs/adapters/template/` компілюється без warnings
