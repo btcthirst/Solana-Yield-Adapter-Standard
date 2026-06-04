@@ -3,6 +3,8 @@ members = [
     "programs/registry",
     "programs/dispatcher",
     "programs/marginfi-adapter",
+    "programs/kamino-adapter",
+    "programs/drift-adapter",
 ]
 resolver = "2"
 
