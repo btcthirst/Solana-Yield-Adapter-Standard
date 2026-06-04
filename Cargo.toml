@@ -6,6 +6,7 @@ members = [
     "programs/kamino-adapter",
     "programs/drift-adapter",
     "programs/jupiter-lp-adapter",
+    "programs/maple-adapter",
 ]
 resolver = "2"
 

@@ -1,0 +1,11 @@
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum AdapterError {
+    InsufficientFunds = 0,   // 6000
+    InsufficientShares = 1,  // 6001
+    SlippageExceeded = 2,    // 6002
+    Overflow = 3,            // 6003
+    ProtocolError = 100,     // 6100
+    InvalidPoolState = 101,  // 6101
+}
