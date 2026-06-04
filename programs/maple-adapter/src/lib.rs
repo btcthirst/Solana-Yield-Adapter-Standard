@@ -7,7 +7,7 @@ pub mod state;
 
 use instructions::*;
 
-declare_id!("MapLEW5NpbGAa1dHWEivf6LwnfVBBktqbaqxGxaFknF");
+declare_id!("EuffaJ2ccu1PnppDd5rTBxPvFXA4u8YQKDj6DyqsyVot");
 
 #[program]
 pub mod maple_adapter {
