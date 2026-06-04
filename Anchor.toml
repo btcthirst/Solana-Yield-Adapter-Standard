@@ -11,7 +11,8 @@ dispatcher       = "F6QyZM6rb5i1bDsW9gQMrPBVzZeEfSRbR2JDzDQTJuQ1"
 registry         = "4NP3DgbM7JJDBQEiU9ojUJ3yYnCoEnbBCsACfQz32xdB"
 marginfi_adapter = "47aSt3hDuDSW1RFz2Qbi9tUc5V7HMotJU3zyiqrkZ9zz"
 kamino_adapter   = "5ksJ5dU6jAoZaUnpcXtGN69xXewcRcGLTBisQHSkwc44"
-drift_adapter    = "BYT5wbAodWevNJRLnaU2Qe87prHWqycBoZh3oWnCXeY8"
+drift_adapter       = "BYT5wbAodWevNJRLnaU2Qe87prHWqycBoZh3oWnCXeY8"
+jupiter_lp_adapter  = "7JVMN1WEVmXGFdAu5AQsGFfxEAjoL2uD79hEzeo9115E"
 
 [provider]
 cluster = "localnet"
