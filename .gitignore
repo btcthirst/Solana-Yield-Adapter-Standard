@@ -10,3 +10,5 @@ build/
 
 # Surfpool
 .surfpool/
+txtx.yml
+runbooks/

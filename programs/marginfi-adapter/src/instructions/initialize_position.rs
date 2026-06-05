@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    cpi::{self, MARGINFI_ACCOUNT_SEED, MARGINFI_PROGRAM_ID},
+    cpi::{self, MARGINFI_PROGRAM_ID},
     state::MarginfiAdapterPosition,
 };
 
@@ -33,20 +33,12 @@ pub struct InitializePosition<'info> {
     /// CHECK: read-only, validated by MarginFi program
     pub marginfi_group: UncheckedAccount<'info>,
 
-    /// The MarginFi account PDA being created inside the MarginFi program.
-    /// Seeds under MARGINFI_PROGRAM_ID: [b"marginfi_account", group, authority].
-    /// CHECK: PDA derivation validated by seeds::program constraint
-    #[account(
-        mut,
-        seeds = [
-            MARGINFI_ACCOUNT_SEED,
-            marginfi_group.key().as_ref(),
-            marginfi_authority.key().as_ref(),
-        ],
-        bump,
-        seeds::program = MARGINFI_PROGRAM_ID,
-    )]
-    pub marginfi_account: UncheckedAccount<'info>,
+    /// The MarginFi account being created inside the MarginFi program.
+    /// MarginFi's `marginfi_account_initialize` requires this to be a fresh
+    /// keypair that signs its own initialization (it is `init`-ed with no seeds,
+    /// not a PDA), so the client must generate it and pass it as a signer.
+    #[account(mut)]
+    pub marginfi_account: Signer<'info>,
 
     /// CHECK: must equal MARGINFI_PROGRAM_ID
     #[account(address = MARGINFI_PROGRAM_ID)]

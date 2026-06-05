@@ -78,7 +78,7 @@ async function fundTokenAccount(
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MARGINFI_PROGRAM_ID = new PublicKey("MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA");
-// USDC bank address — group is read dynamically from bank account data (offset 48..80)
+// USDC bank address — group is read dynamically from bank account data (offset 41..73)
 const USDC_BANK           = new PublicKey("2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB");
 const USDC_MINT           = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 const ADAPTER_PROGRAM_ID  = new PublicKey("47aSt3hDuDSW1RFz2Qbi9tUc5V7HMotJU3zyiqrkZ9zz"); // marginfi-adapter
@@ -91,14 +91,15 @@ function findPDA(seeds: Buffer[], program: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(seeds, program)[0];
 }
 
-// Read marginfi group pubkey from bank account data (offset 48..80, after 8-byte disc).
+// Read marginfi group pubkey from bank account data (offset 41..73:
+// disc(8) + mint(32) + mint_decimals(1) = 41, then group Pubkey).
 // Surfpool fetches mainnet accounts lazily; retry until available.
 // Returns null if not available (test will skip).
 async function readMarginfiGroup(conn: Connection): Promise<PublicKey | null> {
   for (let attempt = 0; attempt < 6; attempt++) {
     const info = await conn.getAccountInfo(USDC_BANK);
     if (info && info.data.length >= 80) {
-      const groupBytes = info.data.slice(48, 80);
+      const groupBytes = info.data.slice(41, 73);
       return new PublicKey(groupBytes);
     }
     await new Promise(r => setTimeout(r, 2000));
@@ -144,9 +145,12 @@ describe("MarginFi Adapter", () => {
   const destinationTokenAccount = getAssociatedTokenAddressSync(USDC_MINT, owner.publicKey);
 
   let program: Program;
-  // marginfiGroup and marginfiAccount are derived in before() after reading bank data
+  // marginfiGroup is read in before() from bank data.
+  // marginfiAccount is a fresh keypair — MarginFi initializes it as a signer-owned
+  // account (not a PDA), so the client generates it and signs the init tx with it.
   let marginfiGroup: PublicKey;
-  let marginfiAccount: PublicKey;
+  const marginfiAccountKp = Keypair.generate();
+  const marginfiAccount = marginfiAccountKp.publicKey;
   let forkAvailable = false;
 
   before(async function () {
@@ -154,7 +158,7 @@ describe("MarginFi Adapter", () => {
     const sig = await connection.requestAirdrop(owner.publicKey, 10 * LAMPORTS_PER_SOL);
     await connection.confirmTransaction(sig);
 
-    // Read the MarginFi group from the bank account (offset 48..80)
+    // Read the MarginFi group from the bank account (offset 41..73)
     const group = await readMarginfiGroup(connection);
     if (!group) {
       skipOrFail(this, "MarginFi USDC bank not available");
@@ -162,14 +166,6 @@ describe("MarginFi Adapter", () => {
     }
     forkAvailable = true;
     marginfiGroup = group;
-    marginfiAccount = findPDA(
-      [
-        Buffer.from("marginfi_account"),
-        marginfiGroup.toBuffer(),
-        marginfiAuthority.toBuffer(),
-      ],
-      MARGINFI_PROGRAM_ID
-    );
 
     // Load adapter IDL and create program client
     const idlPath = path.join(__dirname, "../../target/idl/marginfi_adapter.json");
@@ -227,7 +223,7 @@ describe("MarginFi Adapter", () => {
         marginfiProgram: MARGINFI_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
-      .signers([owner])
+      .signers([owner, marginfiAccountKp])
       .rpc();
 
     const pos = await (program.account as any).marginfiAdapterPosition.fetch(adapterPosition);

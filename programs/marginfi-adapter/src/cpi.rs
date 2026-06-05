@@ -28,15 +28,16 @@ pub const VAULT_AUTH_SEED: &[u8] = b"liquidity_vault_auth";
 /// I80F48 fixed-point ONE: value 1.0 = 2^48.
 pub const ONE_I80F48: u128 = 1u128 << 48;
 
-/// Bank account layout (repr(C), zero_copy, offset includes 8-byte discriminator):
-///   [0..8]   discriminator
-///   [8..40]  mint: Pubkey
-///   [40..41] mint_decimals: u8
-///   [41..48] _pad0: [u8; 7]
-///   [48..80] group: Pubkey
-///   [80..88] _pad1: [u8; 8]
-///   [88..104] asset_share_value: WrappedI80F48 (i128 LE)
-pub const ASSET_SHARE_VALUE_OFFSET: usize = 88;
+/// Bank account layout (repr(C), zero_copy, offset includes 8-byte discriminator).
+/// Offsets verified empirically against the mainnet USDC bank:
+///   [0..8]    discriminator
+///   [8..40]   mint: Pubkey
+///   [40..41]  mint_decimals: u8
+///   [41..73]  group: Pubkey
+///   [73..80]  _pad: [u8; 7]
+///   [80..96]  asset_share_value: WrappedI80F48 (i128 LE)
+///   [96..112] liability_share_value: WrappedI80F48 (i128 LE)
+pub const ASSET_SHARE_VALUE_OFFSET: usize = 80;
 
 /// Read the Bank's asset_share_value (I80F48) as u128.
 /// asset_share_value starts at 1.0 (= ONE_I80F48) and increases as interest accrues.
@@ -94,7 +95,7 @@ pub fn cpi_initialize_account<'info>(
             program_id: marginfi_program.key(),
             accounts: vec![
                 AccountMeta::new_readonly(marginfi_group.key(), false),
-                AccountMeta::new(marginfi_account.key(), false),
+                AccountMeta::new(marginfi_account.key(), true),
                 AccountMeta::new_readonly(authority.key(), true),
                 AccountMeta::new(fee_payer.key(), true),
                 AccountMeta::new_readonly(system_program.key(), false),
@@ -136,6 +137,8 @@ pub fn cpi_deposit<'info>(
 ) -> Result<()> {
     let mut data = DISC_DEPOSIT.to_vec();
     data.extend_from_slice(&amount.to_le_bytes());
+    // deposit_up_to_limit: Option<bool> = None
+    data.push(0u8);
 
     invoke_signed(
         &Instruction {
@@ -193,7 +196,13 @@ pub fn cpi_withdraw<'info>(
 ) -> Result<()> {
     let mut data = DISC_WITHDRAW.to_vec();
     data.extend_from_slice(&amount.to_le_bytes());
-    data.push(withdraw_all as u8);
+    // withdraw_all: Option<bool> — Some(true) when closing the position, else None.
+    if withdraw_all {
+        data.push(1u8); // Some
+        data.push(1u8); // true
+    } else {
+        data.push(0u8); // None
+    }
 
     let mut account_metas = vec![
         AccountMeta::new_readonly(marginfi_group.key(), false),

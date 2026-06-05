@@ -114,13 +114,13 @@ function strToBytes64(s: string): number[] {
   return Array.from(buf);
 }
 
-// Read marginfi group pubkey from USDC bank account data (offset 48..80).
+// Read marginfi group pubkey from USDC bank account data (offset 41..73).
 // Returns null if the bank account is not yet available (mainnet fork not running).
 async function readMarginfiGroup(conn: Connection): Promise<PublicKey | null> {
   for (let attempt = 0; attempt < 6; attempt++) {
     const info = await conn.getAccountInfo(USDC_BANK);
     if (info && info.data.length >= 80) {
-      return new PublicKey(info.data.slice(48, 80));
+      return new PublicKey(info.data.slice(41, 73));
     }
     await new Promise(r => setTimeout(r, 2000));
   }
@@ -145,6 +145,9 @@ describe("Dispatcher Integration", () => {
   let adapterPosition:            PublicKey;
   let marginfiAuthority:          PublicKey;
   let marginfiGroup:              PublicKey;
+  // MarginFi initializes this as a signer-owned account (not a PDA), so the
+  // client generates a keypair and signs the adapter init tx with it.
+  const marginfiAccountKp = Keypair.generate();
   let marginfiAccount:            PublicKey;
   let bankLiquidityVault:         PublicKey;
   let bankLiquidityVaultAuthority: PublicKey;
@@ -194,10 +197,7 @@ describe("Dispatcher Integration", () => {
     adapterPosition   = findPDA([Buffer.from("mfi_pos"),  owner.publicKey.toBuffer()], MARGINFI_ADAPTER_ID);
     marginfiAuthority = findPDA([Buffer.from("mfi_auth"), owner.publicKey.toBuffer()], MARGINFI_ADAPTER_ID);
 
-    marginfiAccount = findPDA(
-      [Buffer.from("marginfi_account"), marginfiGroup.toBuffer(), marginfiAuthority.toBuffer()],
-      MARGINFI_PROGRAM_ID
-    );
+    marginfiAccount = marginfiAccountKp.publicKey;
 
     bankLiquidityVault = findPDA(
       [Buffer.from("liquidity_vault"), USDC_BANK.toBuffer()],
@@ -252,7 +252,7 @@ describe("Dispatcher Integration", () => {
         marginfiProgram:  MARGINFI_PROGRAM_ID,
         systemProgram:    SystemProgram.programId,
       })
-      .signers([owner])
+      .signers([owner, marginfiAccountKp])
       .rpc();
 
     // ── Dispatcher: initialize_position (creates UserPosition PDA) ────────────
