@@ -7,9 +7,10 @@ pub mod state;
 
 use instructions::*;
 
-// Replace with the output of:
-//   solana-keygen pubkey target/deploy/template_adapter-keypair.json
-declare_id!("11111111111111111111111111111111");
+// TODO: replace with your program's deployed address:
+//   solana-keygen new --outfile target/deploy/my_adapter-keypair.json
+//   solana-keygen pubkey target/deploy/my_adapter-keypair.json
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
 pub mod template_adapter {

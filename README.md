@@ -174,6 +174,8 @@ npx tsx scripts/register-adapter.ts approve \
 
 **Registry is the source of trust.** The Dispatcher reads `RegistryEntry.is_active` (revoked check) and `is_paused` before every CPI. Constraint checks happen before the adapter CPI, so invalid calls are rejected cheaply.
 
+**Known limitation — Maple adapter.** The Maple Finance adapter accepts **syrupUSDC** (Maple's yield-bearing token) directly rather than USDC. Users must acquire syrupUSDC externally — via an Orca/Jupiter swap on Solana or via Chainlink CCIP from Ethereum — before calling `deposit`. This breaks the uniform USDC-in/USDC-out abstraction that the other four adapters provide. See SPEC.md §3 for details.
+
 ---
 
 ## CI

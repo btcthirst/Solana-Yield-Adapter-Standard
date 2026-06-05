@@ -25,13 +25,13 @@ Maintains the authoritative list of approved adapters.
 
 **`RegistryState`** — singleton PDA
 - Seeds: `[b"registry_state"]` @ Registry
-- Space: 8 + 32 + 32 + 1 + 4 = 77 bytes
+- Space: 8 + 32 + 32 + 1 = 73 bytes
 
 | Field | Type | Description |
 |---|---|---|
 | `authority` | `Pubkey` | Can approve/revoke adapters |
 | `pending_authority` | `Pubkey` | Proposed next authority (2-step transfer) |
-| `adapter_count` | `u32` | Total adapters ever approved |
+| `bump` | `u8` | PDA bump seed |
 
 **`RegistryEntry`** — one per approved adapter
 - Seeds: `[b"registry_entry", adapter_program_id]` @ Registry
@@ -65,13 +65,16 @@ Maintains the authoritative list of approved adapters.
 
 #### Error Codes
 
+Registry errors use Anchor's default sequential offsets from base 6000:
+
 | Code | Name | Condition |
 |---|---|---|
-| 6200 | `AdapterNotFound` | RegistryEntry does not exist |
-| 6201 | `AdapterRevoked` | `is_active == false` |
-| 6202 | `AdapterPaused` | `is_paused == true` |
-| 6203 | `Unauthorized` | Signer is not the authority |
-| 6204 | `AlreadyRevoked` | Tried to revoke already-revoked adapter |
+| 6000 | `Unauthorized` | Signer is not the registry authority |
+| 6001 | `AlreadyRegistered` | Adapter already has an active RegistryEntry |
+| 6002 | `NotFound` | RegistryEntry does not exist or is already closed |
+| 6003 | `EntryStillActive` | Cannot close entry — revoke it first |
+| 6004 | `NoPendingTransfer` | `accept_authority` called with no pending transfer |
+| 6005 | `NotPendingAuthority` | Signer is not the pending authority |
 
 ---
 
@@ -123,11 +126,16 @@ Routes user calls to the correct adapter after verifying registry status.
 
 #### Dispatcher Error Codes
 
-| Code | Name | Condition |
+Dispatcher errors use explicit offsets (non-sequential). Note that registry-constraint errors (6200–6202) originate in the Dispatcher — they are thrown during account constraint validation, before any CPI is made:
+
+| Code (offset) | Name | Condition |
 |---|---|---|
-| 6000 | `InsufficientShares` | `UserPosition.shares < requested shares` |
-| 6001 | `PositionNotEmpty` | `close_position` called with `shares > 0` |
-| 6002 | `ReturnDataMissing` | Adapter did not call `set_return_data` |
+| 6001 (1) | `InsufficientShares` | `UserPosition.shares < requested shares` |
+| 6003 (3) | `Overflow` | Arithmetic overflow in share accounting |
+| 6200 (200) | `AdapterNotRegistered` | No `RegistryEntry` PDA exists for this adapter |
+| 6201 (201) | `AdapterRevoked` | `RegistryEntry.is_active == false` |
+| 6202 (202) | `AdapterPaused` | `RegistryEntry.is_paused == true` |
+| 6204 (204) | `AdapterError` | Adapter returned no data or invalid return data |
 
 ---
 
@@ -188,6 +196,8 @@ Each adapter defines its own internal share unit. The Dispatcher tracks only the
 
 `current_value()` must always compute the live USDC value from the current exchange rate, not a cached value.
 
+> **Known limitation — Maple adapter:** Unlike the other four adapters, the Maple adapter accepts **syrupUSDC** directly rather than USDC. syrupUSDC is Maple's yield-bearing token and must be acquired externally before calling `deposit` (via Orca/Jupiter swap on Solana, or via Chainlink CCIP bridge from Ethereum). This breaks the uniform USDC-in/USDC-out abstraction for this adapter. A future version could wrap an Orca CPI to automate the swap; the current implementation prioritises correctness of the custodial model over interface uniformity.
+
 ---
 
 ## 4. Return Data Contract
@@ -201,7 +211,7 @@ The Dispatcher depends on return data written by the adapter. The contract:
 | `current_value` | adapter | `u64`, little-endian — USDC lamport value |
 | `initialize_position` | optional | not read by Dispatcher |
 
-`set_return_data` must be called unconditionally before `Ok(())`. If the call returns before writing return data, the Dispatcher will error with `ReturnDataMissing`.
+`set_return_data` must be called unconditionally before `Ok(())`. If the call returns before writing return data, the Dispatcher will error with `AdapterError` (6204).
 
 ---
 
@@ -229,25 +239,47 @@ All PDAs use canonical Anchor derivation (`find_program_address`).
 
 ---
 
-## 7. Error Code Ranges
+## 7. Error Codes
 
-| Range | Owner |
-|---|---|
-| 6000–6099 | Dispatcher |
-| 6100–6199 | Adapter (standard codes — must be consistent across all adapters) |
-| 6200–6299 | Registry |
+Anchor assigns program-local error codes independently per program, all starting from base **6000 + offset**. There are no cross-program numeric ranges — Registry, Dispatcher, and every adapter each have their own independent error space that happens to start at 6000.
 
-Standard adapter error codes:
+The practical consequence: when a transaction fails, inspect **which program** returned the error (`logs` field) to determine whether a code like `6001` means `InsufficientShares` (adapter) or `AlreadyRegistered` (Registry).
 
-| Code | Name | Meaning |
-|---|---|---|
-| 6000 | `InsufficientFunds` | `amount == 0` on deposit |
-| 6001 | `InsufficientShares` | Not enough shares to withdraw |
-| 6002 | `SlippageExceeded` | Protocol returned fewer assets than minimum |
-| 6003 | `Overflow` | Arithmetic overflow in share computation |
-| 6100 | `ProtocolError` | Unexpected protocol state or wrong account |
-| 6101 | `CooldownActive` | Withdrawal is in cooldown, re-call later |
-| 6103 | `OracleStale` | Oracle price is too old to use |
+### Adapter standard codes (all adapters must use these offsets)
+
+Standardising adapter error offsets allows clients to interpret errors from any adapter uniformly without knowing the specific adapter program.
+
+| Offset | Value | Name | Meaning |
+|---|---|---|---|
+| 0 | 6000 | `InsufficientFunds` | `amount == 0` on deposit |
+| 1 | 6001 | `InsufficientShares` | Not enough shares to withdraw |
+| 2 | 6002 | `SlippageExceeded` | Protocol returned fewer assets than minimum |
+| 3 | 6003 | `Overflow` | Arithmetic overflow in share computation |
+| 100 | 6100 | `ProtocolError` | Unexpected protocol state or wrong account |
+| 101 | 6101 | `CooldownActive` | Withdrawal is in cooldown, re-call later |
+| 103 | 6103 | `OracleStale` | Oracle price is too old to use |
+
+### Dispatcher error codes
+
+| Offset | Value | Name | Meaning |
+|---|---|---|---|
+| 1 | 6001 | `InsufficientShares` | `UserPosition.shares < requested shares` |
+| 3 | 6003 | `Overflow` | Arithmetic overflow in share accounting |
+| 200 | 6200 | `AdapterNotRegistered` | No `RegistryEntry` for this adapter |
+| 201 | 6201 | `AdapterRevoked` | `is_active == false` |
+| 202 | 6202 | `AdapterPaused` | `is_paused == true` |
+| 204 | 6204 | `AdapterError` | Adapter returned no data or invalid return data |
+
+### Registry error codes
+
+| Offset | Value | Name | Meaning |
+|---|---|---|---|
+| 0 | 6000 | `Unauthorized` | Signer is not the registry authority |
+| 1 | 6001 | `AlreadyRegistered` | Adapter already has an active entry |
+| 2 | 6002 | `NotFound` | RegistryEntry not found |
+| 3 | 6003 | `EntryStillActive` | Revoke before closing |
+| 4 | 6004 | `NoPendingTransfer` | No authority transfer in progress |
+| 5 | 6005 | `NotPendingAuthority` | Signer is not the pending authority |
 
 ---
 
