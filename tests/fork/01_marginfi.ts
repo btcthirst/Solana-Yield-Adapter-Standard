@@ -26,6 +26,7 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { expect } from "chai";
+import { skipOrFail } from "../utils/forkGuard";
 import * as fs from "fs";
 import * as path from "path";
 // ─── surfpool helper (inlined to avoid cross-dir TS module resolution issues) ─
@@ -156,9 +157,7 @@ describe("MarginFi Adapter", () => {
     // Read the MarginFi group from the bank account (offset 48..80)
     const group = await readMarginfiGroup(connection);
     if (!group) {
-      console.log("    ⚠  USDC bank not available — mainnet fork required. Skipping all tests.");
-      console.log("       Run with: SURFPOOL_DATASOURCE_RPC_URL=<mainnet-rpc-url> anchor test --skip-build");
-      this.skip();
+      skipOrFail(this, "MarginFi USDC bank not available");
       return;
     }
     forkAvailable = true;

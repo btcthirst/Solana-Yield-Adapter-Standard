@@ -34,6 +34,7 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { expect } from "chai";
+import { skipOrFail } from "../utils/forkGuard";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -142,9 +143,7 @@ describe("Maple Adapter", () => {
     // syrupUSDC mint must exist for initialize_position to work
     const mintAvailable = await checkMintAvailable(connection);
     if (!mintAvailable) {
-      console.log("    ⚠  syrupUSDC mint not available — mainnet fork required. Skipping all tests.");
-      console.log("       Run with: SURFPOOL_DATASOURCE_RPC_URL=<mainnet-rpc-url> anchor test --skip-build");
-      this.skip();
+      skipOrFail(this, "syrupUSDC mint not available");
       return;
     }
 

@@ -39,6 +39,7 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { expect } from "chai";
+import { skipOrFail } from "../utils/forkGuard";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -160,9 +161,7 @@ describe("Dispatcher Integration", () => {
     // Check mainnet fork availability — reads USDC bank to get marginfi group
     const group = await readMarginfiGroup(connection);
     if (!group) {
-      console.log("    ⚠  USDC bank not available — mainnet fork required. Skipping Dispatcher tests.");
-      console.log("       Run with: SURFPOOL_DATASOURCE_RPC_URL=<mainnet-rpc-url> anchor test --skip-build");
-      this.skip();
+      skipOrFail(this, "MarginFi USDC bank not available (Dispatcher e2e)");
       return;
     }
     marginfiGroup = group;

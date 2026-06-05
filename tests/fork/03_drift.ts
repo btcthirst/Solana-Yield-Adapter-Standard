@@ -32,6 +32,7 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { expect } from "chai";
+import { skipOrFail } from "../utils/forkGuard";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -192,9 +193,7 @@ describe("Drift Adapter", () => {
     // Validate mainnet fork is up
     const info = await readSpotMarket(connection);
     if (!info) {
-      console.log("    ⚠  Drift spot market not available — mainnet fork required. Skipping all tests.");
-      console.log("       Run with: SURFPOOL_DATASOURCE_RPC_URL=<mainnet-rpc-url> anchor test --skip-build");
-      this.skip();
+      skipOrFail(this, "Drift spot market not available");
       return;
     }
     spotMarketInfo = info;

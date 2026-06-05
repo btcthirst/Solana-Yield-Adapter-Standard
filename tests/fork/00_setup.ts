@@ -14,6 +14,8 @@
  * individual test will gracefully skip.
  */
 
+import { FORK_REQUIRED } from "../utils/forkGuard";
+
 const MAINNET_RPC = process.env.SURFPOOL_DATASOURCE_RPC_URL;
 const LOCAL_RPC   = "http://127.0.0.1:8899";
 
@@ -67,6 +69,20 @@ async function fetchFromMainnet(pubkey: string): Promise<AccountValue | null> {
   return json.result?.value ?? null;
 }
 
+async function isSurfpoolHealthy(): Promise<boolean> {
+  try {
+    const res = await fetch(LOCAL_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+    });
+    const json = (await res.json()) as { result?: string };
+    return json.result === "ok";
+  } catch {
+    return false;
+  }
+}
+
 async function injectIntoSurfpool(pubkey: string, account: AccountValue): Promise<void> {
   // surfpool v1.1.1 params: ["pubkey", {lamports, data: hexstring, owner, executable, rentEpoch}]
   const dataHex = Buffer.from(account.data[0], "base64").toString("hex");
@@ -98,11 +114,23 @@ async function injectIntoSurfpool(pubkey: string, account: AccountValue): Promis
 
 before(async function () {
   if (!MAINNET_RPC) {
+    if (FORK_REQUIRED) {
+      throw new Error(
+        "FORK_REQUIRED=1 but SURFPOOL_DATASOURCE_RPC_URL is not set — " +
+          "CI cannot run mainnet-fork tests without a datasource RPC.",
+      );
+    }
     // No mainnet RPC — individual tests will skip gracefully.
     return;
   }
 
   this.timeout(120_000);
+
+  // In CI, surfpool itself must be reachable before we try to clone state.
+  if (FORK_REQUIRED && !(await isSurfpoolHealthy())) {
+    throw new Error(`FORK_REQUIRED=1 but surfpool is not responding at ${LOCAL_RPC}.`);
+  }
+
   console.log(`\n  Cloning ${Object.keys(ACCOUNTS_TO_CLONE).length} mainnet accounts into surfpool…`);
 
   let ok = 0;
@@ -126,4 +154,11 @@ before(async function () {
   }
 
   console.log(`  Done: ${ok} cloned, ${fail} skipped/failed.\n`);
+
+  if (FORK_REQUIRED && fail > 0) {
+    throw new Error(
+      `FORK_REQUIRED=1 but ${fail} required mainnet account(s) failed to clone — ` +
+        "the fork is incomplete, refusing to run with partial state.",
+    );
+  }
 });
