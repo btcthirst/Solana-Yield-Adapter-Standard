@@ -12,7 +12,7 @@ pub struct ClosePosition<'info> {
         mut,
         seeds = [UserPosition::SEED, owner.key().as_ref(), adapter.as_ref()],
         bump = user_position.bump,
-        constraint = user_position.owner == owner.key() @ DispatcherError::AdapterNotRegistered,
+        constraint = user_position.owner == owner.key() @ DispatcherError::Unauthorized,
         constraint = user_position.shares == 0 @ DispatcherError::InsufficientShares,
         close = owner,
     )]

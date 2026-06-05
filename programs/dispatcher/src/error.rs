@@ -19,4 +19,7 @@ pub enum DispatcherError {
 
     #[msg("Adapter did not return expected data")]
     AdapterError = 204,
+
+    #[msg("Signer is not the owner of this position")]
+    Unauthorized = 205,
 }

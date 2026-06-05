@@ -1,3 +1,8 @@
+// Scaffold module: parameters are intentionally named (not `_`-prefixed) to
+// document what each placeholder helper should receive. Silence the unused
+// warnings until you fill in the real logic.
+#![allow(unused_variables)]
+
 use anchor_lang::{
     prelude::*,
     solana_program::{

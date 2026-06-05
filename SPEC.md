@@ -126,16 +126,23 @@ Routes user calls to the correct adapter after verifying registry status.
 
 #### Dispatcher Error Codes
 
-Dispatcher errors use explicit offsets (non-sequential). Note that registry-constraint errors (6200–6202) originate in the Dispatcher — they are thrown during account constraint validation, before any CPI is made:
+Dispatcher errors use explicit offsets (non-sequential). The `AdapterRevoked`/`AdapterPaused` checks originate in the Dispatcher — they are thrown during account constraint validation, before any CPI is made:
 
 | Code (offset) | Name | Condition |
 |---|---|---|
 | 6001 (1) | `InsufficientShares` | `UserPosition.shares < requested shares` |
 | 6003 (3) | `Overflow` | Arithmetic overflow in share accounting |
-| 6200 (200) | `AdapterNotRegistered` | No `RegistryEntry` PDA exists for this adapter |
 | 6201 (201) | `AdapterRevoked` | `RegistryEntry.is_active == false` |
 | 6202 (202) | `AdapterPaused` | `RegistryEntry.is_paused == true` |
 | 6204 (204) | `AdapterError` | Adapter returned no data or invalid return data |
+| 6205 (205) | `Unauthorized` | Signer is not the owner of the `UserPosition` (`close_position`) |
+
+> **Missing adapter.** When no `RegistryEntry` PDA exists for the adapter, the
+> `registry_entry` account is loaded as a typed `Account<RegistryEntry>`, so
+> Anchor fails deserialization first with its built-in **`AccountNotInitialized`
+> (3012)** — *not* a Dispatcher code. `AdapterNotRegistered` (6200) is defined in
+> the enum but reserved; clients detecting an unregistered adapter should match
+> on Anchor error `3012`.
 
 ---
 
@@ -197,6 +204,18 @@ Each adapter defines its own internal share unit. The Dispatcher tracks only the
 `current_value()` must always compute the live USDC value from the current exchange rate, not a cached value.
 
 > **Known limitation — Maple adapter:** Unlike the other four adapters, the Maple adapter accepts **syrupUSDC** directly rather than USDC. syrupUSDC is Maple's yield-bearing token and must be acquired externally before calling `deposit` (via Orca/Jupiter swap on Solana, or via Chainlink CCIP bridge from Ethereum). This breaks the uniform USDC-in/USDC-out abstraction for this adapter. A future version could wrap an Orca CPI to automate the swap; the current implementation prioritises correctness of the custodial model over interface uniformity.
+>
+> **NAV oracle — Maple `current_value`:** The NAV is read from the canonical
+> `MAPLE_POOL_STATE` account (identity enforced by an `address` constraint;
+> passing any other account fails with `InvalidPoolState`). The account's byte
+> layout (`total_assets_usdc @ 8`, `total_syrup_supply @ 16`) is **not yet
+> verified against mainnet**. When the data cannot be parsed into a sane NAV
+> (account not yet populated by CCIP, or unverified layout), `current_value`
+> returns a **conservative 1.0 floor** — syrupUSDC is yield-bearing so true NAV
+> is always ≥ 1.0, meaning the floor never *overstates* value — and emits a
+> `msg!` log (`"NAV oracle unavailable — using conservative 1.0 floor"`) so a
+> client can distinguish a fallback from a verified reading. Verifying the
+> on-chain offsets and removing the fallback is tracked as follow-up work.
 
 ---
 
@@ -265,21 +284,27 @@ Standardising adapter error offsets allows clients to interpret errors from any 
 |---|---|---|---|
 | 1 | 6001 | `InsufficientShares` | `UserPosition.shares < requested shares` |
 | 3 | 6003 | `Overflow` | Arithmetic overflow in share accounting |
-| 200 | 6200 | `AdapterNotRegistered` | No `RegistryEntry` for this adapter |
+| 200 | 6200 | `AdapterNotRegistered` | *Reserved* — a missing entry surfaces as Anchor `AccountNotInitialized` (3012) |
 | 201 | 6201 | `AdapterRevoked` | `is_active == false` |
 | 202 | 6202 | `AdapterPaused` | `is_paused == true` |
 | 204 | 6204 | `AdapterError` | Adapter returned no data or invalid return data |
+| 205 | 6205 | `Unauthorized` | Signer is not the `UserPosition` owner (`close_position`) |
 
 ### Registry error codes
 
 | Offset | Value | Name | Meaning |
 |---|---|---|---|
 | 0 | 6000 | `Unauthorized` | Signer is not the registry authority |
-| 1 | 6001 | `AlreadyRegistered` | Adapter already has an active entry |
-| 2 | 6002 | `NotFound` | RegistryEntry not found |
+| 1 | 6001 | `AlreadyRegistered` | *Reserved* — duplicate approval is rejected by Anchor `init` (account already in use) |
+| 2 | 6002 | `NotFound` | *Reserved* — a missing entry surfaces as Anchor `AccountNotInitialized` (3012) |
 | 3 | 6003 | `EntryStillActive` | Revoke before closing |
 | 4 | 6004 | `NoPendingTransfer` | No authority transfer in progress |
 | 5 | 6005 | `NotPendingAuthority` | Signer is not the pending authority |
+
+> `AlreadyRegistered` and `NotFound` are defined in the `RegistryError` enum for
+> completeness but are not thrown by the current handlers: adapter (de)registration
+> is gated by Anchor's `init` / seeded-`Account` loading, which produce the built-in
+> errors noted above.
 
 ---
 
