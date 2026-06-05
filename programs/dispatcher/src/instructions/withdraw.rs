@@ -39,13 +39,14 @@ pub struct Withdraw<'info> {
 pub fn handler(ctx: Context<Withdraw>, shares: u64) -> Result<()> {
     let pos_shares = ctx.accounts.user_position.shares;
 
-    // shares = 0 means "withdraw all"
-    let shares_to_withdraw = if shares == 0 {
-        pos_shares
-    } else {
+    // shares == 0 means "withdraw all" — forward it verbatim so the adapter takes
+    // its own withdraw-all path (per SPEC §2.2). Expanding 0 -> pos_shares here
+    // would force adapters onto their partial-withdraw path even for a full exit.
+    // For a non-zero request, guard against over-withdrawal before the CPI.
+    if shares != 0 {
         require!(shares <= pos_shares, DispatcherError::InsufficientShares);
-        shares
-    };
+    }
+    let shares_to_withdraw = shares;
 
     let adapter_id = ctx.accounts.adapter_program.key();
 
