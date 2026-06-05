@@ -1,7 +1,7 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 
 use crate::{
-    cpi::{self, INSTRUCTIONS_SYSVAR_ID, KLEND_PROGRAM_ID, MAIN_LENDING_MARKET},
+    cpi::{self, FARMS_PROGRAM_ID, INSTRUCTIONS_SYSVAR_ID, KLEND_PROGRAM_ID, MAIN_LENDING_MARKET},
     error::AdapterError,
     state::KaminoAdapterPosition,
 };
@@ -86,6 +86,20 @@ pub struct Deposit<'info> {
     #[account(address = INSTRUCTIONS_SYSVAR_ID)]
     pub instruction_sysvar: UncheckedAccount<'info>,
 
+    /// Obligation farm-user-state (created in initialize_position).
+    /// CHECK: validated by the Kamino farms program
+    #[account(mut)]
+    pub obligation_farm_user_state: UncheckedAccount<'info>,
+
+    /// Reserve collateral farm state (reserve.farmCollateral).
+    /// CHECK: validated by the Kamino farms program against the reserve
+    #[account(mut)]
+    pub reserve_farm_state: UncheckedAccount<'info>,
+
+    /// CHECK: must equal FARMS_PROGRAM_ID
+    #[account(address = FARMS_PROGRAM_ID)]
+    pub farms_program: UncheckedAccount<'info>,
+
     /// CHECK: must equal KLEND_PROGRAM_ID
     #[account(address = KLEND_PROGRAM_ID)]
     pub klend_program: UncheckedAccount<'info>,
@@ -119,6 +133,25 @@ pub fn handler<'info>(ctx: Context<'info, Deposit<'info>>, amount: u64) -> Resul
         [oracle0, oracle1, oracle2, oracle3],
     )?;
 
+    // CPI 2: refresh_obligation (V2 deposit requires a fresh obligation).
+    // refresh_obligation must be passed exactly the reserves the obligation
+    // currently holds. For a single-reserve adapter, shares == 0 means the
+    // obligation has no USDC deposit yet (Kamino drops empty deposits on full
+    // withdraw), so pass no reserves on the first deposit and [reserve] after.
+    let reserve_ai = ctx.accounts.reserve.to_account_info();
+    let obligation_reserves: Vec<AccountInfo<'info>> =
+        if ctx.accounts.adapter_position.shares == 0 {
+            vec![]
+        } else {
+            vec![reserve_ai]
+        };
+    cpi::cpi_refresh_obligation(
+        &ctx.accounts.klend_program,
+        &ctx.accounts.lending_market,
+        &ctx.accounts.obligation,
+        &obligation_reserves,
+    )?;
+
     let owner_key = ctx.accounts.owner.key();
     let signer_seeds: &[&[&[u8]]] = &[&[
         KaminoAdapterPosition::AUTH_SEED,
@@ -141,6 +174,9 @@ pub fn handler<'info>(ctx: Context<'info, Deposit<'info>>, amount: u64) -> Resul
         &ctx.accounts.user_source_liquidity,
         &ctx.accounts.token_program,
         &ctx.accounts.instruction_sysvar,
+        &ctx.accounts.obligation_farm_user_state,
+        &ctx.accounts.reserve_farm_state,
+        &ctx.accounts.farms_program,
         amount,
         signer_seeds,
     )?;

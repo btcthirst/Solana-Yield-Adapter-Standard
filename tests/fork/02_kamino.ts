@@ -92,6 +92,7 @@ const ADAPTER_PROGRAM_ID  = new PublicKey("5ksJ5dU6jAoZaUnpcXtGN69xXewcRcGLTBisQ
 // Kamino refresh_reserve. Passed as oracle slot [3]; slots [0..2] are the klend
 // program id (the Kamino "None" sentinel) since this reserve uses Scope.
 const SCOPE_PRICES        = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+const FARMS_PROGRAM_ID    = new PublicKey("FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr");
 
 const DEPOSIT_USDC = 10_000_000; // 10 USDC (6 decimals)
 
@@ -104,6 +105,7 @@ const oracleRemaining = (klend: PublicKey, scope: PublicKey) => [
 ];
 
 // Reserve layout offsets — see programs/kamino-adapter/src/cpi.rs
+const OFF_FARM_COLLATERAL   = 64;   // reserve.farmCollateral (Pubkey)
 const OFF_LIQUIDITY_MINT    = 128;
 const OFF_LIQUIDITY_SUPPLY  = 160;
 const OFF_COLLATERAL_MINT   = 2560;
@@ -120,6 +122,7 @@ interface ReserveAccounts {
   liquiditySupply: PublicKey;
   collateralMint: PublicKey;
   collateralSupply: PublicKey;
+  farmCollateral: PublicKey;
 }
 
 // Read Kamino reserve vault/mint addresses from on-chain reserve account data.
@@ -133,12 +136,13 @@ async function readReserve(conn: Connection, reserve: PublicKey): Promise<Reserv
       const liquiditySupply = new PublicKey(d.slice(OFF_LIQUIDITY_SUPPLY,  OFF_LIQUIDITY_SUPPLY + 32));
       const collateralMint  = new PublicKey(d.slice(OFF_COLLATERAL_MINT,   OFF_COLLATERAL_MINT + 32));
       const collateralSupply = new PublicKey(d.slice(OFF_COLLATERAL_SUPPLY, OFF_COLLATERAL_SUPPLY + 32));
+      const farmCollateral   = new PublicKey(d.slice(OFF_FARM_COLLATERAL,   OFF_FARM_COLLATERAL + 32));
       // Sanity-check: liquidity mint must be USDC
       if (liquidityMint.toBase58() !== USDC_MINT.toBase58()) {
         console.log(`    ⚠  Reserve liquidity mint mismatch: got ${liquidityMint.toBase58()}`);
         return null;
       }
-      return { liquidityMint, liquiditySupply, collateralMint, collateralSupply };
+      return { liquidityMint, liquiditySupply, collateralMint, collateralSupply, farmCollateral };
     }
     await new Promise(r => setTimeout(r, 2000));
   }
@@ -193,6 +197,10 @@ describe("Kamino Adapter", () => {
 
   let program: Program;
   let ra: ReserveAccounts;
+  // Farm accounts (V2 deposit/withdraw): reserveFarmState read from reserve data,
+  // obligationFarm derived from it once known.
+  let reserveFarmState: PublicKey;
+  let obligationFarm: PublicKey;
 
   before(async function () {
     this.timeout(60_000);
@@ -207,6 +215,11 @@ describe("Kamino Adapter", () => {
       return;
     }
     ra = reserve;
+    reserveFarmState = ra.farmCollateral;
+    obligationFarm = findPDA(
+      [Buffer.from("user"), reserveFarmState.toBuffer(), obligation.toBuffer()],
+      FARMS_PROGRAM_ID
+    );
 
     const idlPath = path.join(__dirname, "../../target/idl/kamino_adapter.json");
     const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
@@ -260,10 +273,17 @@ describe("Kamino Adapter", () => {
         ownerUserMetadata,
         obligation,
         reserve: USDC_RESERVE,
+        lendingMarketAuthority,
+        reserveFarmState,
+        obligationFarm,
+        farmsProgram: FARMS_PROGRAM_ID,
         klendProgram: KLEND_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
       })
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+      ])
       .signers([owner])
       .rpc();
 
@@ -300,6 +320,9 @@ describe("Kamino Adapter", () => {
         userSourceLiquidity,
         tokenProgram: TOKEN_PROGRAM_ID,
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        obligationFarmUserState: obligationFarm,
+        reserveFarmState,
+        farmsProgram: FARMS_PROGRAM_ID,
         klendProgram: KLEND_PROGRAM_ID,
       })
       .remainingAccounts(oracleRemaining(KLEND_PROGRAM_ID, SCOPE_PRICES))
@@ -362,9 +385,13 @@ describe("Kamino Adapter", () => {
         reserveSourceCollateral: ra.collateralSupply,
         reserveCollateralMint: ra.collateralMint,
         reserveLiquiditySupply: ra.liquiditySupply,
+        authorityLiquidity: userSourceLiquidity,
         userDestinationLiquidity,
         tokenProgram: TOKEN_PROGRAM_ID,
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        obligationFarmUserState: obligationFarm,
+        reserveFarmState,
+        farmsProgram: FARMS_PROGRAM_ID,
         klendProgram: KLEND_PROGRAM_ID,
       })
       .remainingAccounts(oracleRemaining(KLEND_PROGRAM_ID, SCOPE_PRICES))

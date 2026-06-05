@@ -1,7 +1,7 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 
 use crate::{
-    cpi::{self, INSTRUCTIONS_SYSVAR_ID, KLEND_PROGRAM_ID, MAIN_LENDING_MARKET},
+    cpi::{self, FARMS_PROGRAM_ID, INSTRUCTIONS_SYSVAR_ID, KLEND_PROGRAM_ID, MAIN_LENDING_MARKET},
     error::AdapterError,
     state::KaminoAdapterPosition,
 };
@@ -75,7 +75,14 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub reserve_liquidity_supply: UncheckedAccount<'info>,
 
-    /// CHECK: User's USDC ATA (receives withdrawn USDC)
+    /// Kamino sends the redeemed USDC here. Kamino requires this account to be
+    /// owned by the obligation owner (kamino_authority), so it is the authority's
+    /// USDC ATA, not the user's. The handler then forwards the funds to the user.
+    /// CHECK: validated by the Kamino program (owner == kamino_authority)
+    #[account(mut)]
+    pub authority_liquidity: UncheckedAccount<'info>,
+
+    /// CHECK: User's USDC ATA (final destination — handler transfers here)
     #[account(mut)]
     pub user_destination_liquidity: UncheckedAccount<'info>,
 
@@ -85,6 +92,20 @@ pub struct Withdraw<'info> {
     /// CHECK: Instructions sysvar
     #[account(address = INSTRUCTIONS_SYSVAR_ID)]
     pub instruction_sysvar: UncheckedAccount<'info>,
+
+    /// Obligation farm-user-state (created in initialize_position).
+    /// CHECK: validated by the Kamino farms program
+    #[account(mut)]
+    pub obligation_farm_user_state: UncheckedAccount<'info>,
+
+    /// Reserve collateral farm state (reserve.farmCollateral).
+    /// CHECK: validated by the Kamino farms program against the reserve
+    #[account(mut)]
+    pub reserve_farm_state: UncheckedAccount<'info>,
+
+    /// CHECK: must equal FARMS_PROGRAM_ID
+    #[account(address = FARMS_PROGRAM_ID)]
+    pub farms_program: UncheckedAccount<'info>,
 
     /// CHECK: must equal KLEND_PROGRAM_ID
     #[account(address = KLEND_PROGRAM_ID)]
@@ -136,7 +157,11 @@ pub fn handler<'info>(ctx: Context<'info, Withdraw<'info>>, shares: u64) -> Resu
 
     // CPI 3: withdraw_obligation_collateral_and_redeem_reserve_collateral.
     // Kamino interprets u64::MAX as "withdraw all" for collateral_amount.
+    // Kamino requires the destination to be owned by the obligation owner, so it
+    // pays out to the authority's USDC ATA; we forward to the user afterwards.
     let collateral_amount = if shares == 0 { u64::MAX } else { ctokens_to_withdraw };
+
+    let auth_before = cpi::read_token_amount(&ctx.accounts.authority_liquidity)?;
 
     cpi::cpi_withdraw(
         &ctx.accounts.klend_program,
@@ -149,12 +174,31 @@ pub fn handler<'info>(ctx: Context<'info, Withdraw<'info>>, shares: u64) -> Resu
         &ctx.accounts.reserve_source_collateral,
         &ctx.accounts.reserve_collateral_mint,
         &ctx.accounts.reserve_liquidity_supply,
-        &ctx.accounts.user_destination_liquidity,
+        &ctx.accounts.authority_liquidity,
         &ctx.accounts.token_program,
         &ctx.accounts.instruction_sysvar,
+        &ctx.accounts.obligation_farm_user_state,
+        &ctx.accounts.reserve_farm_state,
+        &ctx.accounts.farms_program,
         collateral_amount,
         signer_seeds,
     )?;
+
+    // Forward the redeemed USDC from the authority ATA to the user.
+    let auth_after = cpi::read_token_amount(&ctx.accounts.authority_liquidity)?;
+    let withdrawn = auth_after
+        .checked_sub(auth_before)
+        .ok_or(error!(AdapterError::Overflow))?;
+    if withdrawn > 0 {
+        cpi::cpi_token_transfer(
+            &ctx.accounts.token_program,
+            &ctx.accounts.authority_liquidity,
+            &ctx.accounts.user_destination_liquidity,
+            &ctx.accounts.kamino_authority,
+            withdrawn,
+            signer_seeds,
+        )?;
+    }
 
     let pos = &mut ctx.accounts.adapter_position;
     pos.shares = pos.shares

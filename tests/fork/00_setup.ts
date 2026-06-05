@@ -32,6 +32,13 @@ const ACCOUNTS_TO_CLONE: Record<string, string> = {
   "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59": "Kamino USDC reserve",
   "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF": "Kamino main lending market",
   "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH": "Kamino USDC scope prices",
+  "JAvnB9AKtgPsTEoKmn24Bq64UMoYcrtWtq42HHBdsPkh": "Kamino USDC collateral farm",
+  // Reserve vaults — cloned alongside the reserve so their token balances stay
+  // consistent with the reserve's tracked available_amount / mint_total_supply
+  // (a slot mismatch trips Kamino's post-deposit balance invariant).
+  "Bgq7trRgVMeq33yt235zM2onQ4bRDBsY5EWiTetF4qw6": "Kamino USDC reserve liquidity supply vault",
+  "B8V6WVjPxW1UGwVDfxH2d2r8SyT4cqn7dQRK6XneVa7D": "Kamino USDC reserve collateral mint",
+  "3DzjXRfxRm6iejfyyMynR4tScddaanrePJ1NJU2XnPPL": "Kamino USDC reserve collateral supply vault",
 
   // ── Drift ─────────────────────────────────────────────────────────────────
   "5zpq7DvB6UdFFvpmBPspGPNfUGoBRRCE2HHg5u3gxcsN": "Drift state",

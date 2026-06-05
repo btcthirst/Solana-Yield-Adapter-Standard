@@ -1,7 +1,10 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    cpi::{self, KLEND_PROGRAM_ID, MAIN_LENDING_MARKET, RENT_SYSVAR_ID, USER_METADATA_SEED},
+    cpi::{
+        self, FARMS_PROGRAM_ID, KLEND_PROGRAM_ID, MAIN_LENDING_MARKET, RENT_SYSVAR_ID,
+        USER_METADATA_SEED,
+    },
     state::KaminoAdapterPosition,
 };
 
@@ -71,7 +74,32 @@ pub struct InitializePosition<'info> {
     /// USDC Reserve in the Kamino lending market.
     /// Stored in adapter_position for validation in subsequent calls.
     /// CHECK: existence/ownership validated by Kamino on deposit/withdraw
+    #[account(mut)]
     pub reserve: UncheckedAccount<'info>,
+
+    /// Lending market authority PDA (Kamino-owned), needed to init the farm state.
+    /// CHECK: validated by Kamino; seeds = [b"lma", lending_market] @ KLEND_PROGRAM_ID
+    pub lending_market_authority: UncheckedAccount<'info>,
+
+    /// The reserve's collateral farm state (reserve.farmCollateral).
+    /// CHECK: validated by the Kamino farms program against the reserve
+    #[account(mut)]
+    pub reserve_farm_state: UncheckedAccount<'info>,
+
+    /// The obligation's farm-user-state, created here for the V2 deposit path.
+    /// Seeds under FARMS_PROGRAM_ID: [b"user", reserve_farm_state, obligation].
+    /// CHECK: PDA derivation validated by seeds::program constraint
+    #[account(
+        mut,
+        seeds = [b"user", reserve_farm_state.key().as_ref(), obligation.key().as_ref()],
+        bump,
+        seeds::program = FARMS_PROGRAM_ID,
+    )]
+    pub obligation_farm: UncheckedAccount<'info>,
+
+    /// CHECK: must equal FARMS_PROGRAM_ID
+    #[account(address = FARMS_PROGRAM_ID)]
+    pub farms_program: UncheckedAccount<'info>,
 
     /// CHECK: must equal KLEND_PROGRAM_ID
     #[account(address = KLEND_PROGRAM_ID)]
@@ -120,6 +148,24 @@ pub fn handler(ctx: Context<InitializePosition>) -> Result<()> {
         &ctx.accounts.rent,
         &ctx.accounts.system_program,
         signer_seeds,
+    )?;
+
+    // Create the obligation's farm-user-state (mode 0 = collateral farm) so the
+    // V2 deposit/withdraw can update the farm. Permissionless — payer (owner) signs.
+    cpi::cpi_init_obligation_farms_for_reserve(
+        &ctx.accounts.klend_program,
+        &ctx.accounts.owner,
+        &ctx.accounts.kamino_authority,
+        &ctx.accounts.obligation,
+        &ctx.accounts.lending_market_authority,
+        &ctx.accounts.reserve,
+        &ctx.accounts.reserve_farm_state,
+        &ctx.accounts.obligation_farm,
+        &ctx.accounts.lending_market,
+        &ctx.accounts.farms_program,
+        &ctx.accounts.rent,
+        &ctx.accounts.system_program,
+        0, // mode 0 = collateral farm
     )?;
 
     let pos = &mut ctx.accounts.adapter_position;

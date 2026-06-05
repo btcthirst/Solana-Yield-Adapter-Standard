@@ -2,7 +2,7 @@ use anchor_lang::{
     prelude::*,
     solana_program::{
         instruction::{AccountMeta, Instruction},
-        program::invoke_signed,
+        program::{invoke, invoke_signed},
     },
 };
 
@@ -36,10 +36,16 @@ pub const DISC_INIT_OBLIGATION: [u8; 8] = [0xfb, 0x0a, 0xe7, 0x4c, 0x1b, 0x0b, 0
 pub const DISC_REFRESH_RESERVE: [u8; 8] = [0x02, 0xda, 0x8a, 0xeb, 0x4f, 0xc9, 0x19, 0x66];
 /// sha256("global:refresh_obligation")[0..8]
 pub const DISC_REFRESH_OBLIGATION: [u8; 8] = [0x21, 0x84, 0x93, 0xe4, 0x97, 0xc0, 0x48, 0x59];
-/// sha256("global:deposit_reserve_liquidity_and_obligation_collateral")[0..8]
-pub const DISC_DEPOSIT: [u8; 8] = [0x81, 0xc7, 0x04, 0x02, 0xde, 0x27, 0x1a, 0x2e];
-/// sha256("global:withdraw_obligation_collateral_and_redeem_reserve_collateral")[0..8]
-pub const DISC_WITHDRAW: [u8; 8] = [0x4b, 0x5d, 0x5d, 0xdc, 0x22, 0x96, 0xda, 0xc4];
+/// sha256("global:deposit_reserve_liquidity_and_obligation_collateral_v2")[0..8]
+/// V2 variant — required when the reserve has an active farm (carries farm accounts).
+pub const DISC_DEPOSIT_V2: [u8; 8] = [0xd8, 0xe0, 0xbf, 0x1b, 0xcc, 0x97, 0x66, 0xaf];
+/// sha256("global:withdraw_obligation_collateral_and_redeem_reserve_collateral_v2")[0..8]
+pub const DISC_WITHDRAW_V2: [u8; 8] = [0xeb, 0x34, 0x77, 0x98, 0x95, 0xc5, 0x14, 0x07];
+/// sha256("global:init_obligation_farms_for_reserve")[0..8]
+pub const DISC_INIT_FARMS: [u8; 8] = [0x88, 0x3f, 0x0f, 0xba, 0xd3, 0x98, 0xa8, 0xa4];
+
+/// Kamino Farms program ID.
+pub const FARMS_PROGRAM_ID: Pubkey = pubkey!("FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr");
 
 // --- Reserve data offsets (absolute, including 8-byte Anchor discriminator prefix)
 //
@@ -141,6 +147,43 @@ pub fn ctokens_to_amount(
         .checked_mul(total_liquidity as u128)?
         .checked_div(ctoken_supply as u128)?;
     u64::try_from(value).ok()
+}
+
+// ── SPL token helpers ───────────────────────────────────────────────────────────
+
+/// Read an SPL token account's `amount` (offset 64..72).
+pub fn read_token_amount(token_account: &AccountInfo) -> Result<u64> {
+    let data = token_account.try_borrow_data()?;
+    require!(data.len() >= 72, crate::error::AdapterError::ProtocolError);
+    Ok(u64::from_le_bytes(data[64..72].try_into().unwrap()))
+}
+
+/// SPL Token `transfer` (instruction 3) signed by a PDA authority.
+pub fn cpi_token_transfer<'info>(
+    token_program: &AccountInfo<'info>,
+    src: &AccountInfo<'info>,
+    dst: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    amount: u64,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    let mut data = vec![3u8]; // SPL Token: Transfer
+    data.extend_from_slice(&amount.to_le_bytes());
+
+    invoke_signed(
+        &Instruction {
+            program_id: token_program.key(),
+            accounts: vec![
+                AccountMeta::new(src.key(), false),
+                AccountMeta::new(dst.key(), false),
+                AccountMeta::new_readonly(authority.key(), true),
+            ],
+            data,
+        },
+        &[src.clone(), dst.clone(), authority.clone()],
+        signer_seeds,
+    )?;
+    Ok(())
 }
 
 // ── CPI helpers ───────────────────────────────────────────────────────────────
@@ -329,7 +372,7 @@ pub fn cpi_refresh_obligation<'info>(
         AccountMeta::new(obligation.key(), false),
     ];
     for r in reserves {
-        accounts.push(AccountMeta::new_readonly(r.key(), false));
+        accounts.push(AccountMeta::new(r.key(), false));
     }
 
     let mut account_infos = vec![lending_market.clone(), obligation.clone()];
@@ -347,9 +390,86 @@ pub fn cpi_refresh_obligation<'info>(
     Ok(())
 }
 
-/// CPI: Kamino `deposit_reserve_liquidity_and_obligation_collateral`.
+/// CPI: Kamino `init_obligation_farms_for_reserve` (mode 0 = collateral farm).
 ///
-/// Accounts (from IDL, order is critical):
+/// Creates the obligation's farm-user-state, required before a V2 deposit into a
+/// reserve that has an active farm. `owner` (obligation owner) is NOT a signer
+/// here — the instruction is permissionless; `payer` (the real wallet) signs.
+///
+/// Accounts (from IDL):
+///   0.  payer (mut, signer)
+///   1.  owner
+///   2.  obligation (mut)
+///   3.  lendingMarketAuthority
+///   4.  reserve (mut)
+///   5.  reserveFarmState (mut)
+///   6.  obligationFarm (mut)
+///   7.  lendingMarket
+///   8.  farmsProgram
+///   9.  rent
+///   10. systemProgram
+///
+/// Args: mode (u8).
+#[allow(clippy::too_many_arguments)]
+pub fn cpi_init_obligation_farms_for_reserve<'info>(
+    klend_program: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    owner: &AccountInfo<'info>,
+    obligation: &AccountInfo<'info>,
+    lending_market_authority: &AccountInfo<'info>,
+    reserve: &AccountInfo<'info>,
+    reserve_farm_state: &AccountInfo<'info>,
+    obligation_farm: &AccountInfo<'info>,
+    lending_market: &AccountInfo<'info>,
+    farms_program: &AccountInfo<'info>,
+    rent: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    mode: u8,
+) -> Result<()> {
+    let mut data = DISC_INIT_FARMS.to_vec();
+    data.push(mode);
+
+    invoke(
+        &Instruction {
+            program_id: klend_program.key(),
+            accounts: vec![
+                AccountMeta::new(payer.key(), true),                              // payer
+                AccountMeta::new_readonly(owner.key(), false),                    // owner
+                AccountMeta::new(obligation.key(), false),                        // obligation
+                AccountMeta::new_readonly(lending_market_authority.key(), false), // lendingMarketAuthority
+                AccountMeta::new(reserve.key(), false),                           // reserve
+                AccountMeta::new(reserve_farm_state.key(), false),                // reserveFarmState
+                AccountMeta::new(obligation_farm.key(), false),                   // obligationFarm
+                AccountMeta::new_readonly(lending_market.key(), false),           // lendingMarket
+                AccountMeta::new_readonly(farms_program.key(), false),            // farmsProgram
+                AccountMeta::new_readonly(RENT_SYSVAR_ID, false),                 // rent
+                AccountMeta::new_readonly(system_program.key(), false),           // systemProgram
+            ],
+            data,
+        },
+        &[
+            payer.clone(),
+            owner.clone(),
+            obligation.clone(),
+            lending_market_authority.clone(),
+            reserve.clone(),
+            reserve_farm_state.clone(),
+            obligation_farm.clone(),
+            lending_market.clone(),
+            farms_program.clone(),
+            rent.clone(),
+            system_program.clone(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// CPI: Kamino `deposit_reserve_liquidity_and_obligation_collateral_v2`.
+///
+/// V2 carries the farm accounts (the USDC main-market reserve has an active
+/// farm, so the V1 instruction is rejected with CpiDisabled when CPI'd).
+///
+/// Accounts (deposit group, then farms group):
 ///   0.  owner (signer, mut) — kamino_authority PDA
 ///   1.  obligation (mut)
 ///   2.  lendingMarket
@@ -360,12 +480,16 @@ pub fn cpi_refresh_obligation<'info>(
 ///   7.  reserveCollateralMint (mut)
 ///   8.  reserveDestinationDepositCollateral (mut)
 ///   9.  userSourceLiquidity (mut)
-///   10. placeholderUserDestinationCollateral (optional, readonly)
+///   10. placeholderUserDestinationCollateral (readonly)
 ///   11. collateralTokenProgram
 ///   12. liquidityTokenProgram
 ///   13. instructionSysvarAccount
+///   14. obligationFarmUserState (mut)
+///   15. reserveFarmState (mut)
+///   16. farmsProgram
 ///
 /// Args: liquidity_amount (u64).
+#[allow(clippy::too_many_arguments)]
 pub fn cpi_deposit<'info>(
     klend_program: &AccountInfo<'info>,
     owner: &AccountInfo<'info>,
@@ -380,10 +504,13 @@ pub fn cpi_deposit<'info>(
     user_source_liquidity: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     instruction_sysvar: &AccountInfo<'info>,
+    obligation_farm_user_state: &AccountInfo<'info>,
+    reserve_farm_state: &AccountInfo<'info>,
+    farms_program: &AccountInfo<'info>,
     liquidity_amount: u64,
     signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
-    let mut data = DISC_DEPOSIT.to_vec();
+    let mut data = DISC_DEPOSIT_V2.to_vec();
     data.extend_from_slice(&liquidity_amount.to_le_bytes());
 
     invoke_signed(
@@ -404,6 +531,9 @@ pub fn cpi_deposit<'info>(
                 AccountMeta::new_readonly(token_program.key(), false),                   // collateralTokenProgram
                 AccountMeta::new_readonly(token_program.key(), false),                   // liquidityTokenProgram
                 AccountMeta::new_readonly(instruction_sysvar.key(), false),              // instructionSysvarAccount
+                AccountMeta::new(obligation_farm_user_state.key(), false),               // obligationFarmUserState
+                AccountMeta::new(reserve_farm_state.key(), false),                       // reserveFarmState
+                AccountMeta::new_readonly(farms_program.key(), false),                   // farmsProgram
             ],
             data,
         },
@@ -421,15 +551,20 @@ pub fn cpi_deposit<'info>(
             token_program.clone(),
             token_program.clone(),
             instruction_sysvar.clone(),
+            obligation_farm_user_state.clone(),
+            reserve_farm_state.clone(),
+            farms_program.clone(),
         ],
         signer_seeds,
     )?;
     Ok(())
 }
 
-/// CPI: Kamino `withdraw_obligation_collateral_and_redeem_reserve_collateral`.
+/// CPI: Kamino `withdraw_obligation_collateral_and_redeem_reserve_collateral_v2`.
 ///
-/// Accounts (from IDL, order is critical):
+/// V2 carries the farm accounts (farmed reserve — see deposit note).
+///
+/// Accounts (withdraw group, then farms group):
 ///   0.  owner (signer, mut) — kamino_authority PDA
 ///   1.  obligation (mut)
 ///   2.  lendingMarket
@@ -440,12 +575,16 @@ pub fn cpi_deposit<'info>(
 ///   7.  reserveCollateralMint (mut)
 ///   8.  reserveLiquiditySupply (mut)
 ///   9.  userDestinationLiquidity (mut)
-///   10. placeholderUserDestinationCollateral (optional)
+///   10. placeholderUserDestinationCollateral (readonly)
 ///   11. collateralTokenProgram
 ///   12. liquidityTokenProgram
 ///   13. instructionSysvarAccount
+///   14. obligationFarmUserState (mut)
+///   15. reserveFarmState (mut)
+///   16. farmsProgram
 ///
 /// Args: collateral_amount (u64) — ctokens to withdraw (pass u64::MAX to withdraw all).
+#[allow(clippy::too_many_arguments)]
 pub fn cpi_withdraw<'info>(
     klend_program: &AccountInfo<'info>,
     owner: &AccountInfo<'info>,
@@ -460,10 +599,13 @@ pub fn cpi_withdraw<'info>(
     user_destination_liquidity: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     instruction_sysvar: &AccountInfo<'info>,
+    obligation_farm_user_state: &AccountInfo<'info>,
+    reserve_farm_state: &AccountInfo<'info>,
+    farms_program: &AccountInfo<'info>,
     collateral_amount: u64,
     signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
-    let mut data = DISC_WITHDRAW.to_vec();
+    let mut data = DISC_WITHDRAW_V2.to_vec();
     data.extend_from_slice(&collateral_amount.to_le_bytes());
 
     invoke_signed(
@@ -484,6 +626,9 @@ pub fn cpi_withdraw<'info>(
                 AccountMeta::new_readonly(token_program.key(), false),                // collateralTokenProgram
                 AccountMeta::new_readonly(token_program.key(), false),                // liquidityTokenProgram
                 AccountMeta::new_readonly(instruction_sysvar.key(), false),           // instructionSysvarAccount
+                AccountMeta::new(obligation_farm_user_state.key(), false),            // obligationFarmUserState
+                AccountMeta::new(reserve_farm_state.key(), false),                    // reserveFarmState
+                AccountMeta::new_readonly(farms_program.key(), false),                // farmsProgram
             ],
             data,
         },
@@ -501,6 +646,9 @@ pub fn cpi_withdraw<'info>(
             token_program.clone(),
             token_program.clone(),
             instruction_sysvar.clone(),
+            obligation_farm_user_state.clone(),
+            reserve_farm_state.clone(),
+            farms_program.clone(),
         ],
         signer_seeds,
     )?;
