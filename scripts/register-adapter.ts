@@ -291,13 +291,43 @@ async function cmdStatus(
   console.log(`  By:        ${entry.approvedBy.toBase58()}`);
 }
 
+async function cmdInit(
+  program: Program,
+  opts: Record<string, string>,
+  authority: Keypair,
+  registryState: PublicKey
+) {
+  const authorityPubkey = opts["authority"]
+    ? new PublicKey(opts["authority"])
+    : authority.publicKey;
+
+  console.log(`Initializing Registry...`);
+  console.log(`  Authority: ${authorityPubkey.toBase58()}`);
+  console.log(`  State PDA: ${registryState.toBase58()}`);
+
+  const tx = await (program.methods as any)
+    .initializeRegistry(authorityPubkey)
+    .accounts({
+      payer: authority.publicKey,
+      registryState,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    })
+    .signers([authority])
+    .rpc();
+
+  console.log(`\nRegistry initialized. Tx: ${tx}`);
+}
+
 async function cmdList(program: Program, registryState: PublicKey) {
   const state = await (program.account as any).registryState.fetch(registryState);
   console.log(`Registry authority: ${state.authority.toBase58()}`);
-  console.log(`Total adapters:     ${state.adapterCount}`);
   console.log();
 
   const entries = await (program.account as any).registryEntry.all();
+  if (entries.length === 0) {
+    console.log("  (no adapters registered)");
+    return;
+  }
   for (const { publicKey, account } of entries) {
     const active = account.isActive ? "active" : "REVOKED";
     const paused = account.isPaused ? " (PAUSED)" : "";
@@ -318,6 +348,7 @@ Solana Yield Adapter Standard — Registry CLI
 Usage: npx tsx scripts/register-adapter.ts <command> [options]
 
 Commands:
+  init      Initialize the Registry (one-time setup) [--authority <pubkey>]
   approve   --adapter <ID> --name <str> --protocol <str> --mint <pubkey>
   revoke    --adapter <ID>
   pause     --adapter <ID>
@@ -343,6 +374,7 @@ async function main() {
   const { program, keypair, registryState } = await setup();
 
   switch (command) {
+    case "init":    await cmdInit(program, opts, keypair, registryState);    break;
     case "approve": await cmdApprove(program, opts, keypair, registryState); break;
     case "revoke":  await cmdRevoke(program, opts, keypair, registryState);  break;
     case "pause":   await cmdPause(program, opts, keypair, registryState);   break;

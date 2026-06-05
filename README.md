@@ -4,6 +4,8 @@ A composable, on-chain adapter layer that brings any Solana yield protocol behin
 
 Built for the **Superteam Ukraine Bounty** — Anchor v1.0.0 + Solana v3.1.11.
 
+> **Toolchain note:** The bounty spec lists Anchor 0.31.1 / Solana 2.2.20. This implementation uses Anchor 1.0.0 / Solana 3.1.11 — the latest stable releases at submission time. Anchor 1.0.0 introduced breaking changes (`Context` lifetime rules, `UncheckedAccount` patterns) that required adapted patterns documented in the codebase; the interface contract in SPEC.md is identical.
+
 ---
 
 ## Architecture
@@ -50,7 +52,9 @@ Client TX
 
 ---
 
-## Program IDs (localnet / devnet)
+## Program IDs
+
+All programs are deployed on **devnet**. Localnet IDs are identical (same keypairs).
 
 | Program | ID |
 |---|---|
@@ -61,6 +65,15 @@ Client TX
 | Drift IF Adapter | `BYT5wbAodWevNJRLnaU2Qe87prHWqycBoZh3oWnCXeY8` |
 | Jupiter LP Adapter | `7JVMN1WEVmXGFdAu5AQsGFfxEAjoL2uD79hEzeo9115E` |
 | Maple syrupUSDC Adapter | `EuffaJ2ccu1PnppDd5rTBxPvFXA4u8YQKDj6DyqsyVot` |
+
+Registry authority: `DeDQoza7kLWuNWYEgDqxB9YzqhYh3Tw62cufo8JygpSy`
+
+All five adapters are approved and active in the devnet Registry. Verify:
+
+```bash
+ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
+npx tsx scripts/register-adapter.ts list
+```
 
 ---
 
