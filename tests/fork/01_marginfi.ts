@@ -54,16 +54,16 @@ async function fundTokenAccount(
   const body = {
     jsonrpc: "2.0", id: 1,
     method: "surfnet_setAccount",
-    params: [{
-      pubkey: tokenAccount.toBase58(),
-      account: {
+    params: [
+      tokenAccount.toBase58(),
+      {
         lamports: 2_039_280,
-        data: [data.toString("base64"), "base64"],
+        data: data.toString("hex"),
         owner: TOKEN_PROGRAM_ID.toBase58(),
         executable: false,
         rentEpoch: 0,
       },
-    }],
+    ],
   };
   const res = await fetch(rpcUrl, {
     method: "POST",

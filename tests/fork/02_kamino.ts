@@ -58,16 +58,16 @@ async function fundTokenAccount(
   const body = {
     jsonrpc: "2.0", id: 1,
     method: "surfnet_setAccount",
-    params: [{
-      pubkey: tokenAccount.toBase58(),
-      account: {
+    params: [
+      tokenAccount.toBase58(),
+      {
         lamports: 2_039_280,
-        data: [data.toString("base64"), "base64"],
+        data: data.toString("hex"),
         owner: TOKEN_PROGRAM_ID.toBase58(),
         executable: false,
         rentEpoch: 0,
       },
-    }],
+    ],
   };
   const res = await fetch(rpcUrl, {
     method: "POST",
@@ -83,7 +83,7 @@ async function fundTokenAccount(
 const KLEND_PROGRAM_ID    = new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
 const LENDING_MARKET      = new PublicKey("7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF");
 // USDC Reserve in Kamino main market — mint/supply vaults read from account data at runtime
-const USDC_RESERVE        = new PublicKey("D6q6wuQSriferjmtEkLeX43LchH4pvX9kRqoEMTNFJnc");
+const USDC_RESERVE        = new PublicKey("D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59");
 const USDC_MINT           = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 const ADAPTER_PROGRAM_ID  = new PublicKey("5ksJ5dU6jAoZaUnpcXtGN69xXewcRcGLTBisQHSkwc44");
 

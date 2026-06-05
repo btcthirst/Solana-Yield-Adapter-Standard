@@ -45,8 +45,9 @@ pub struct InitializePosition<'info> {
     )]
     pub insurance_fund_stake: UncheckedAccount<'info>,
 
-    /// CHECK: Drift state account; validated by address constraint
-    #[account(address = DRIFT_STATE)]
+    /// CHECK: Drift state account; validated by address constraint. mut because
+    /// initialize_user_stats increments the global user count stored in state.
+    #[account(mut, address = DRIFT_STATE)]
     pub state: UncheckedAccount<'info>,
 
     /// CHECK: USDC spot market; validated by address constraint

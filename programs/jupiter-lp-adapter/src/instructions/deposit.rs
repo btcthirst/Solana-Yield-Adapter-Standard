@@ -32,6 +32,7 @@ pub struct Deposit<'info> {
 
     /// CHECK: PDA derivation validated by seeds constraint
     #[account(
+        mut,
         seeds = [JupiterLpAdapterPosition::AUTH_SEED, owner.key().as_ref()],
         bump = adapter_position.authority_bump,
     )]
@@ -42,11 +43,11 @@ pub struct Deposit<'info> {
     pub perp_program: UncheckedAccount<'info>,
 
     /// CHECK: validated by address constraint
-    #[account(address = JLP_POOL)]
+    #[account(mut, address = JLP_POOL)]
     pub pool: UncheckedAccount<'info>,
 
     /// CHECK: validated by address constraint
-    #[account(address = USDC_CUSTODY)]
+    #[account(mut, address = USDC_CUSTODY)]
     pub custody: UncheckedAccount<'info>,
 
     /// CHECK: USDC custody vault; seeds [b"custody_token_account", pool, usdc_mint] @ PERP

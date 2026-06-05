@@ -61,16 +61,16 @@ async function fundTokenAccount(
   const body = {
     jsonrpc: "2.0", id: 1,
     method: "surfnet_setAccount",
-    params: [{
-      pubkey: tokenAccount.toBase58(),
-      account: {
+    params: [
+      tokenAccount.toBase58(),
+      {
         lamports: 2_039_280,
-        data: [data.toString("base64"), "base64"],
+        data: data.toString("hex"),
         owner: TOKEN_PROGRAM_ID.toBase58(),
         executable: false,
         rentEpoch: 0,
       },
-    }],
+    ],
   };
   const res = await fetch(rpcUrl, {
     method: "POST",
@@ -84,7 +84,7 @@ async function fundTokenAccount(
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PERP_PROGRAM_ID    = new PublicKey("PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu");
-const JLP_POOL           = new PublicKey("5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAcBn4bE7VF");
+const JLP_POOL           = new PublicKey("5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq");
 const JLP_MINT           = new PublicKey("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4");
 const USDC_MINT          = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 const USDC_CUSTODY       = new PublicKey("G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa");

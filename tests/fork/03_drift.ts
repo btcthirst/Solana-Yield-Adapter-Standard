@@ -63,16 +63,16 @@ async function surfnetSetAccount(
   const body = {
     jsonrpc: "2.0", id: 1,
     method: "surfnet_setAccount",
-    params: [{
-      pubkey: pubkey.toBase58(),
-      account: {
+    params: [
+      pubkey.toBase58(),
+      {
         lamports: account.lamports,
-        data: [account.data.toString("base64"), "base64"],
+        data: account.data.toString("hex"),
         owner: account.owner.toBase58(),
         executable: account.executable,
         rentEpoch: 0,
       },
-    }],
+    ],
   };
   const res = await fetch(rpcUrl, {
     method: "POST",
