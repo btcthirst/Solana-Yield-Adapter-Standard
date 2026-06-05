@@ -87,8 +87,21 @@ const LENDING_MARKET      = new PublicKey("7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDq
 const USDC_RESERVE        = new PublicKey("D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59");
 const USDC_MINT           = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 const ADAPTER_PROGRAM_ID  = new PublicKey("5ksJ5dU6jAoZaUnpcXtGN69xXewcRcGLTBisQHSkwc44");
+// Scope price feed configured for the USDC reserve (reserve.config.token_info
+// .scope_configuration.price_feed) — required as the scopePrices account in
+// Kamino refresh_reserve. Passed as oracle slot [3]; slots [0..2] are the klend
+// program id (the Kamino "None" sentinel) since this reserve uses Scope.
+const SCOPE_PRICES        = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
 
 const DEPOSIT_USDC = 10_000_000; // 10 USDC (6 decimals)
+
+// refresh_reserve oracle accounts: [pyth, switchboard_price, switchboard_twap, scope]
+const oracleRemaining = (klend: PublicKey, scope: PublicKey) => [
+  { pubkey: klend, isSigner: false, isWritable: false },
+  { pubkey: klend, isSigner: false, isWritable: false },
+  { pubkey: klend, isSigner: false, isWritable: false },
+  { pubkey: scope, isSigner: false, isWritable: false },
+];
 
 // Reserve layout offsets — see programs/kamino-adapter/src/cpi.rs
 const OFF_LIQUIDITY_MINT    = 128;
@@ -289,6 +302,7 @@ describe("Kamino Adapter", () => {
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         klendProgram: KLEND_PROGRAM_ID,
       })
+      .remainingAccounts(oracleRemaining(KLEND_PROGRAM_ID, SCOPE_PRICES))
       .preInstructions([
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
       ])
@@ -353,6 +367,7 @@ describe("Kamino Adapter", () => {
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         klendProgram: KLEND_PROGRAM_ID,
       })
+      .remainingAccounts(oracleRemaining(KLEND_PROGRAM_ID, SCOPE_PRICES))
       .preInstructions([
         ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 }),
       ])

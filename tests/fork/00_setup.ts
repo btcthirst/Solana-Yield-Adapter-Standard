@@ -31,6 +31,7 @@ const ACCOUNTS_TO_CLONE: Record<string, string> = {
   // ── Kamino ────────────────────────────────────────────────────────────────
   "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59": "Kamino USDC reserve",
   "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF": "Kamino main lending market",
+  "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH": "Kamino USDC scope prices",
 
   // ── Drift ─────────────────────────────────────────────────────────────────
   "5zpq7DvB6UdFFvpmBPspGPNfUGoBRRCE2HHg5u3gxcsN": "Drift state",

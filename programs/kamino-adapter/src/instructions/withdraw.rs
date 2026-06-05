@@ -29,8 +29,10 @@ pub struct Withdraw<'info> {
     )]
     pub adapter_position: Account<'info, KaminoAdapterPosition>,
 
-    /// CHECK: PDA derivation validated by seeds constraint
+    /// CHECK: PDA derivation validated by seeds constraint.
+    /// `mut` because Kamino's withdraw requires `owner` to be writable.
     #[account(
+        mut,
         seeds = [KaminoAdapterPosition::AUTH_SEED, owner.key().as_ref()],
         bump = adapter_position.authority_bump,
     )]
