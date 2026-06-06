@@ -49,6 +49,22 @@ const ACCOUNTS_TO_CLONE: Record<string, string> = {
   "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq": "Jupiter JLP pool",
   "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4": "Jupiter JLP mint",
   "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa": "Jupiter USDC custody",
+  "A28T5pKtscnhDo6C1Sz786Tup88aTjt8uyKewjVvPrGk": "Jupiter USDC doves price",
+  "6Jp2xZUTWdDD2ZyUPRzeMdc6AFQ5K3pFgZxk2EijfjnM": "Jupiter USDC pythnet price",
+  // Other pool custodies + their doves/pythnet feeds — needed for AUM computation
+  // in addLiquidity2/removeLiquidity2 (passed as remaining accounts).
+  "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz": "Jupiter custody A",
+  "39cWjvHrpHNz2SbXv6ME4NPhqBDBd4KsjUYv5JkHEAJU": "Jupiter custody A doves",
+  "FYq2BWQ1V5P1WFBqr3qB2Kb5yHVvSv7upzKodgQE5zXh": "Jupiter custody A pythnet",
+  "AQCGyheWPLeo6Qp9WpYS9m3Qj479t7R636N9ey1rEjEn": "Jupiter custody B",
+  "5URYohbPy32nxK1t3jAHVNfdWY2xTubHiFvLrE3VhXEp": "Jupiter custody B doves",
+  "AFZnHPzy4mvVCffrVwhewHbFc93uTHvDSFrVH7GtfXF1": "Jupiter custody B pythnet",
+  "5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm": "Jupiter custody C",
+  "4HBbPx9QJdjJ7GUe6bsiJjGybvfpDhQMMPXP1UEa7VT5": "Jupiter custody C doves",
+  "hUqAT1KQ7eW1i6Csp9CXYtpPfSAvi835V7wKi5fRfmC": "Jupiter custody C pythnet",
+  "4vkNeXiYEUizLdrpdPS1eC2mccyM4NUPRtERrk6ZETkk": "Jupiter custody D",
+  "AGW7q2a3WxCzh5TB2Q6yNde1Nf41g3HLaaXdybz7cbBU": "Jupiter custody D doves",
+  "Fgc93D641F8N2d1xLjQ4jmShuD3GE3BsCXA56KBQbF5u": "Jupiter custody D pythnet",
 
   // ── Maple ─────────────────────────────────────────────────────────────────
   "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj": "syrupUSDC mint",

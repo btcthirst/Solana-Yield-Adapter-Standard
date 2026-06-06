@@ -82,6 +82,43 @@ async function fundTokenAccount(
   if (json.error) throw new Error(`surfnet_setAccount: ${JSON.stringify(json.error)}`);
 }
 
+// Re-clone accounts from mainnet into surfpool so their data (e.g. oracle publish
+// slot) is fresh relative to surfpool's advancing clock — Jupiter rejects stale
+// oracle prices. Call right before an instruction that reads the oracles.
+// Doves price account stores its publish unix timestamp as i64 at offset 177.
+// Jupiter rejects prices older than ~5s, but a cloned price freezes while
+// surfpool's clock keeps advancing, so we forge the timestamp slightly ahead of
+// surfpool's clock to keep the cloned price "fresh" through the tx.
+const DOVES_TS_OFFSET = 177;
+
+async function rpcCall(url: string, method: string, params: any[]): Promise<any> {
+  const res = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  return ((await res.json()) as any).result;
+}
+
+async function refreshFromMainnet(localRpc: string, pubkeys: PublicKey[]): Promise<void> {
+  const mainnet = process.env.SURFPOOL_DATASOURCE_RPC_URL;
+  if (!mainnet) return;
+  // surfpool Clock unix_timestamp (i64 at offset 32 of the Clock sysvar).
+  const clk = await rpcCall(localRpc, "getAccountInfo",
+    ["SysvarC1ock11111111111111111111111111111111", { encoding: "base64" }]);
+  const clkBuf = Buffer.from(clk.value.data[0], "base64");
+  const freshTs = clkBuf.readBigInt64LE(32) + 60n;
+
+  const fetched = await Promise.all(pubkeys.map(async (pk) =>
+    ({ pk, v: (await rpcCall(mainnet, "getAccountInfo", [pk.toBase58(), { encoding: "base64" }]))?.value })));
+  await Promise.all(fetched.map(async ({ pk, v }) => {
+    if (!v) return;
+    const buf = Buffer.from(v.data[0], "base64");
+    if (buf.length >= DOVES_TS_OFFSET + 8) buf.writeBigInt64LE(freshTs, DOVES_TS_OFFSET);
+    await rpcCall(localRpc, "surfnet_setAccount", [pk.toBase58(),
+      { lamports: v.lamports, data: buf.toString("hex"), owner: v.owner, executable: v.executable, rentEpoch: 0 }]);
+  }));
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PERP_PROGRAM_ID    = new PublicKey("PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu");
@@ -93,32 +130,63 @@ const ADAPTER_PROGRAM_ID = new PublicKey("7JVMN1WEVmXGFdAu5AQsGFfxEAjoL2uD79hEze
 
 const DEPOSIT_USDC = 10_000_000; // 10 USDC (6 decimals)
 
-// Jupiter Custody struct layout (after 8-byte discriminator):
-//   [8..40]   pool: Pubkey
-//   [40..72]  mint: Pubkey
-//   [72..104] token_account: Pubkey
-//   [104]     decimals: u8
-//   [105]     is_stable: bool
-//   [106..138] oracle.oracle_account: Pubkey  ← read here
-const CUSTODY_ORACLE_OFFSET = 106;
+// Jupiter Custody.oracle holds two price feeds used by addLiquidity2/removeLiquidity2:
+//   [320..352] doves price account
+//   [384..416] pythnet price account
+const CUSTODY_DOVES_OFFSET   = 320;
+const CUSTODY_PYTHNET_OFFSET = 384;
+
+// Jupiter Perps event-CPI authority PDA.
+const EVENT_AUTHORITY = findPDAStatic([Buffer.from("__event_authority")], PERP_PROGRAM_ID);
+
+// AUM remaining accounts (verified against a real addLiquidity2 tx): all pool
+// custodies first, then each custody's pythnet price account — in pool.custodies
+// order. Jupiter reads these to compute assets-under-management.
+const POOL_CUSTODIES: PublicKey[] = [
+  "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz",
+  "AQCGyheWPLeo6Qp9WpYS9m3Qj479t7R636N9ey1rEjEn",
+  "5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm",
+  "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa",
+  "4vkNeXiYEUizLdrpdPS1eC2mccyM4NUPRtERrk6ZETkk",
+].map((s) => new PublicKey(s));
+const POOL_PYTHNET_PRICES: PublicKey[] = [
+  "FYq2BWQ1V5P1WFBqr3qB2Kb5yHVvSv7upzKodgQE5zXh",
+  "AFZnHPzy4mvVCffrVwhewHbFc93uTHvDSFrVH7GtfXF1",
+  "hUqAT1KQ7eW1i6Csp9CXYtpPfSAvi835V7wKi5fRfmC",
+  "6Jp2xZUTWdDD2ZyUPRzeMdc6AFQ5K3pFgZxk2EijfjnM",
+  "Fgc93D641F8N2d1xLjQ4jmShuD3GE3BsCXA56KBQbF5u",
+].map((s) => new PublicKey(s));
+const AUM_ACCOUNTS: PublicKey[] = [...POOL_CUSTODIES, ...POOL_PYTHNET_PRICES];
+
+// Named custodyDoves/custodyPythnet slots both take the deposit custody's pythnet
+// price account (per the real tx); remaining[2..] is the AUM list.
+function jupRemaining(custodyPythnet: PublicKey) {
+  return [custodyPythnet, custodyPythnet, ...AUM_ACCOUNTS].map((pubkey) => ({
+    pubkey, isSigner: false, isWritable: false,
+  }));
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function findPDA(seeds: Buffer[], program: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(seeds, program)[0];
 }
+function findPDAStatic(seeds: Buffer[], program: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(seeds, program)[0];
+}
 
-// Read the oracle pubkey from USDC custody account data.
+// Read the doves + pythnet price accounts from USDC custody data.
 // Returns null if the custody is not available (mainnet fork not running).
-async function readCustodyOracle(conn: Connection): Promise<PublicKey | null> {
+async function readCustodyOracles(
+  conn: Connection
+): Promise<{ doves: PublicKey; pythnet: PublicKey } | null> {
   for (let attempt = 0; attempt < 6; attempt++) {
     const info = await conn.getAccountInfo(USDC_CUSTODY);
-    if (info && info.data.length >= CUSTODY_ORACLE_OFFSET + 32) {
-      const oracleBytes = info.data.slice(CUSTODY_ORACLE_OFFSET, CUSTODY_ORACLE_OFFSET + 32);
-      const oracle = new PublicKey(oracleBytes);
-      // Zero pubkey means no oracle configured — skip
-      if (oracle.equals(PublicKey.default)) return null;
-      return oracle;
+    if (info && info.data.length >= CUSTODY_PYTHNET_OFFSET + 32) {
+      const doves = new PublicKey(info.data.slice(CUSTODY_DOVES_OFFSET, CUSTODY_DOVES_OFFSET + 32));
+      const pythnet = new PublicKey(info.data.slice(CUSTODY_PYTHNET_OFFSET, CUSTODY_PYTHNET_OFFSET + 32));
+      if (doves.equals(PublicKey.default) || pythnet.equals(PublicKey.default)) return null;
+      return { doves, pythnet };
     }
     await new Promise(r => setTimeout(r, 2000));
   }
@@ -162,7 +230,8 @@ describe("Jupiter LP Adapter", () => {
   const userUsdcAta      = getAssociatedTokenAddressSync(USDC_MINT, owner.publicKey);
 
   let program: Program;
-  let custodyOracle: PublicKey;
+  let dovesPrice: PublicKey;
+  let pythnetPrice: PublicKey;
 
   before(async function () {
     this.timeout(60_000);
@@ -170,13 +239,14 @@ describe("Jupiter LP Adapter", () => {
     const sig = await connection.requestAirdrop(owner.publicKey, 10 * LAMPORTS_PER_SOL);
     await connection.confirmTransaction(sig);
 
-    // Read oracle from USDC custody — validates fork is up
-    const oracle = await readCustodyOracle(connection);
-    if (!oracle) {
+    // Read doves + pythnet price feeds from USDC custody — validates fork is up
+    const oracles = await readCustodyOracles(connection);
+    if (!oracles) {
       skipOrFail(this, "Jupiter USDC custody not available");
       return;
     }
-    custodyOracle = oracle;
+    dovesPrice = oracles.doves;
+    pythnetPrice = oracles.pythnet;
 
     const idlPath = path.join(__dirname, "../../target/idl/jupiter_lp_adapter.json");
     const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
@@ -240,6 +310,9 @@ describe("Jupiter LP Adapter", () => {
       ? Number(BigInt("0x" + jlpMintInfoBefore.data.slice(36, 44).reverse().reduce((s, b) => s + b.toString(16).padStart(2, "0"), "")))
       : 0;
 
+    // Keep oracle prices fresh vs surfpool's advancing clock.
+    await refreshFromMainnet(RPC_URL, POOL_PYTHNET_PRICES);
+
     await program.methods
       .deposit(new BN(DEPOSIT_USDC))
       .accounts({
@@ -257,12 +330,11 @@ describe("Jupiter LP Adapter", () => {
         authorityUsdcAta,
         userUsdcAta,
         usdcMintAccount: USDC_MINT,
+        eventAuthority: EVENT_AUTHORITY,
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       })
-      .remainingAccounts([
-        { pubkey: custodyOracle, isSigner: false, isWritable: false },
-      ])
+      .remainingAccounts(jupRemaining(pythnetPrice))
       .preInstructions([
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
       ])
@@ -310,6 +382,9 @@ describe("Jupiter LP Adapter", () => {
   it("withdraw(0) burns all JLP and returns USDC to user", async () => {
     const userAtaBefore = await getAccount(connection, userUsdcAta);
 
+    // Keep oracle prices fresh vs surfpool's advancing clock.
+    await refreshFromMainnet(RPC_URL, POOL_PYTHNET_PRICES);
+
     await program.methods
       .withdraw(new BN(0)) // 0 = withdraw all
       .accounts({
@@ -324,13 +399,14 @@ describe("Jupiter LP Adapter", () => {
         perpetuals,
         jlpMint: JLP_MINT,
         authorityJlpAta,
+        usdcMintAccount: USDC_MINT,
+        authorityUsdcAta,
         userUsdcAta,
+        eventAuthority: EVENT_AUTHORITY,
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       })
-      .remainingAccounts([
-        { pubkey: custodyOracle, isSigner: false, isWritable: false },
-      ])
+      .remainingAccounts(jupRemaining(pythnetPrice))
       .preInstructions([
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
       ])

@@ -24,10 +24,13 @@ pub const USDC_CUSTODY: Pubkey = pubkey!("G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisyk
 // ── Instruction discriminators ─────────────────────────────────────────────────
 // sha256("global:{name}")[0..8]
 
-/// sha256("global:add_liquidity")[0..8]
-pub const DISC_ADD_LIQUIDITY: [u8; 8] = [0xb5, 0x9d, 0x59, 0x43, 0x8f, 0xb6, 0x34, 0x48];
-/// sha256("global:remove_liquidity")[0..8]
-pub const DISC_REMOVE_LIQUIDITY: [u8; 8] = [0x50, 0x55, 0xd1, 0x48, 0x18, 0xce, 0xb1, 0x6c];
+/// sha256("global:add_liquidity2")[0..8] — V2 instruction (current on mainnet).
+pub const DISC_ADD_LIQUIDITY: [u8; 8] = [0xe4, 0xa2, 0x4e, 0x1c, 0x46, 0xdb, 0x74, 0x73];
+/// sha256("global:remove_liquidity2")[0..8] — V2 instruction.
+pub const DISC_REMOVE_LIQUIDITY: [u8; 8] = [0xe6, 0xd7, 0x52, 0x7f, 0xf1, 0x65, 0xe3, 0x92];
+
+/// Jupiter Perpetuals event-CPI authority PDA seed.
+pub const EVENT_AUTHORITY_SEED: &[u8] = b"__event_authority";
 
 // ── Pool account layout helpers ────────────────────────────────────────────────
 //
@@ -58,12 +61,7 @@ pub fn read_pool_aum(pool_data: &[u8]) -> Result<u128> {
     let custodies_count = u32::from_le_bytes(pool_data[cursor..cursor + 4].try_into().unwrap()) as usize;
     cursor += 4 + custodies_count * 32;
 
-    // ratios: Vec<TokenRatios> (4-byte count + 24 bytes each)
-    require!(pool_data.len() >= cursor + 4, crate::error::AdapterError::PoolDataTooShort);
-    let ratios_count = u32::from_le_bytes(pool_data[cursor..cursor + 4].try_into().unwrap()) as usize;
-    cursor += 4 + ratios_count * 24;
-
-    // aum_usd: u128
+    // aum_usd: u128 — immediately follows the custodies vec (verified on mainnet)
     require!(
         pool_data.len() >= cursor + 16,
         crate::error::AdapterError::PoolDataTooShort
@@ -101,22 +99,25 @@ pub fn jlp_to_usdc(shares: u64, aum_usd: u128, jlp_supply: u64) -> Option<u64> {
 
 // ── CPI helpers ───────────────────────────────────────────────────────────────
 
-/// CPI: Jupiter Perpetuals `add_liquidity`.
+/// CPI: Jupiter Perpetuals `add_liquidity2` (V2, current on mainnet).
 ///
-/// Accounts:
-///   0.  owner (signer, mut) — jlp_authority PDA
+/// Accounts (IDL order):
+///   0.  owner (signer) — jlp_authority PDA
 ///   1.  fundingAccount (mut) — authority's USDC ATA (source)
 ///   2.  lpTokenAccount (mut) — authority's JLP ATA (destination)
 ///   3.  transferAuthority — PDA [b"transfer_authority"] @ PERP
-///   4.  perpetuals (mut) — PDA [b"perpetuals"] @ PERP
+///   4.  perpetuals — PDA [b"perpetuals"] @ PERP
 ///   5.  pool (mut) — JLP pool
 ///   6.  custody (mut) — USDC custody
-///   7.  custodyOracleAccount — price oracle for USDC custody
-///   8.  custodyTokenAccount (mut) — USDC vault (custody token account)
-///   9.  lpTokenMint (mut) — JLP token mint
-///   10. tokenProgram
+///   7.  custodyDovesPriceAccount — Doves price feed for the custody
+///   8.  custodyPythnetPriceAccount — Pythnet price feed for the custody
+///   9.  custodyTokenAccount (mut) — USDC vault
+///   10. lpTokenMint (mut) — JLP token mint
+///   11. tokenProgram
+///   12. eventAuthority — PDA [b"__event_authority"] @ PERP
+///   13. program — PERP program (event-CPI self reference)
 ///
-/// Args: { amount_in: u64, min_lp_amount_out: u64 }
+/// Args: AddLiquidity2Params { token_amount_in: u64, min_lp_amount_out: u64, token_amount_pre_swap: Option<u64> }
 #[allow(clippy::too_many_arguments)]
 pub fn cpi_add_liquidity<'info>(
     perp_program: &AccountInfo<'info>,
@@ -127,10 +128,13 @@ pub fn cpi_add_liquidity<'info>(
     perpetuals: &AccountInfo<'info>,
     pool: &AccountInfo<'info>,
     custody: &AccountInfo<'info>,
-    custody_oracle: &AccountInfo<'info>,
+    custody_doves_price: &AccountInfo<'info>,
+    custody_pythnet_price: &AccountInfo<'info>,
     custody_token_account: &AccountInfo<'info>,
     lp_token_mint: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
+    event_authority: &AccountInfo<'info>,
+    aum_accounts: &[AccountInfo<'info>],
     amount_in: u64,
     min_lp_amount_out: u64,
     signer_seeds: &[&[&[u8]]],
@@ -138,59 +142,65 @@ pub fn cpi_add_liquidity<'info>(
     let mut data = DISC_ADD_LIQUIDITY.to_vec();
     data.extend_from_slice(&amount_in.to_le_bytes());
     data.extend_from_slice(&min_lp_amount_out.to_le_bytes());
+    data.push(0u8); // token_amount_pre_swap: Option<u64> = None
+
+    let mut metas = vec![
+        AccountMeta::new_readonly(owner.key(), true),
+        AccountMeta::new(funding_account.key(), false),
+        AccountMeta::new(lp_token_account.key(), false),
+        AccountMeta::new_readonly(transfer_authority.key(), false),
+        AccountMeta::new_readonly(perpetuals.key(), false),
+        AccountMeta::new(pool.key(), false),
+        AccountMeta::new(custody.key(), false),
+        AccountMeta::new_readonly(custody_doves_price.key(), false),
+        AccountMeta::new_readonly(custody_pythnet_price.key(), false),
+        AccountMeta::new(custody_token_account.key(), false),
+        AccountMeta::new(lp_token_mint.key(), false),
+        AccountMeta::new_readonly(token_program.key(), false),
+        AccountMeta::new_readonly(event_authority.key(), false),
+        AccountMeta::new_readonly(perp_program.key(), false),
+    ];
+    let mut infos = vec![
+        owner.clone(),
+        funding_account.clone(),
+        lp_token_account.clone(),
+        transfer_authority.clone(),
+        perpetuals.clone(),
+        pool.clone(),
+        custody.clone(),
+        custody_doves_price.clone(),
+        custody_pythnet_price.clone(),
+        custody_token_account.clone(),
+        lp_token_mint.clone(),
+        token_program.clone(),
+        event_authority.clone(),
+        perp_program.clone(),
+    ];
+    // AUM remaining accounts: [custody, doves, pythnet] for every pool custody.
+    for a in aum_accounts {
+        metas.push(AccountMeta::new_readonly(a.key(), false));
+        infos.push(a.clone());
+    }
 
     invoke_signed(
-        &Instruction {
-            program_id: perp_program.key(),
-            accounts: vec![
-                AccountMeta::new(owner.key(), true),
-                AccountMeta::new(funding_account.key(), false),
-                AccountMeta::new(lp_token_account.key(), false),
-                AccountMeta::new_readonly(transfer_authority.key(), false),
-                AccountMeta::new(perpetuals.key(), false),
-                AccountMeta::new(pool.key(), false),
-                AccountMeta::new(custody.key(), false),
-                AccountMeta::new_readonly(custody_oracle.key(), false),
-                AccountMeta::new(custody_token_account.key(), false),
-                AccountMeta::new(lp_token_mint.key(), false),
-                AccountMeta::new_readonly(token_program.key(), false),
-            ],
-            data,
-        },
-        &[
-            owner.clone(),
-            funding_account.clone(),
-            lp_token_account.clone(),
-            transfer_authority.clone(),
-            perpetuals.clone(),
-            pool.clone(),
-            custody.clone(),
-            custody_oracle.clone(),
-            custody_token_account.clone(),
-            lp_token_mint.clone(),
-            token_program.clone(),
-        ],
+        &Instruction { program_id: perp_program.key(), accounts: metas, data },
+        &infos,
         signer_seeds,
     )?;
     Ok(())
 }
 
-/// CPI: Jupiter Perpetuals `remove_liquidity`.
+/// CPI: Jupiter Perpetuals `remove_liquidity2` (V2, current on mainnet).
 ///
-/// Accounts:
-///   0.  owner (signer) — jlp_authority PDA
-///   1.  receivingAccount (mut) — user's USDC ATA (destination)
-///   2.  lpTokenAccount (mut) — authority's JLP ATA (source, JLP burned here)
-///   3.  transferAuthority — PDA [b"transfer_authority"] @ PERP
-///   4.  perpetuals (mut) — PDA [b"perpetuals"] @ PERP
-///   5.  pool (mut) — JLP pool
-///   6.  custody (mut) — USDC custody
-///   7.  custodyOracleAccount — price oracle for USDC custody
-///   8.  custodyTokenAccount (mut) — USDC vault
-///   9.  lpTokenMint (mut) — JLP token mint
-///   10. tokenProgram
+/// Accounts (IDL order): same shape as add_liquidity2, with `receivingAccount`
+/// in slot 1 (USDC destination) and JLP burned from `lpTokenAccount`.
+///   0 owner(signer) 1 receivingAccount(mut) 2 lpTokenAccount(mut)
+///   3 transferAuthority 4 perpetuals 5 pool(mut) 6 custody(mut)
+///   7 custodyDovesPriceAccount 8 custodyPythnetPriceAccount
+///   9 custodyTokenAccount(mut) 10 lpTokenMint(mut) 11 tokenProgram
+///   12 eventAuthority 13 program
 ///
-/// Args: { lp_amount_in: u64, min_amount_out: u64 }
+/// Args: RemoveLiquidity2Params { lp_amount_in: u64, min_amount_out: u64 }
 #[allow(clippy::too_many_arguments)]
 pub fn cpi_remove_liquidity<'info>(
     perp_program: &AccountInfo<'info>,
@@ -201,10 +211,13 @@ pub fn cpi_remove_liquidity<'info>(
     perpetuals: &AccountInfo<'info>,
     pool: &AccountInfo<'info>,
     custody: &AccountInfo<'info>,
-    custody_oracle: &AccountInfo<'info>,
+    custody_doves_price: &AccountInfo<'info>,
+    custody_pythnet_price: &AccountInfo<'info>,
     custody_token_account: &AccountInfo<'info>,
     lp_token_mint: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
+    event_authority: &AccountInfo<'info>,
+    aum_accounts: &[AccountInfo<'info>],
     lp_amount_in: u64,
     min_amount_out: u64,
     signer_seeds: &[&[&[u8]]],
@@ -213,37 +226,46 @@ pub fn cpi_remove_liquidity<'info>(
     data.extend_from_slice(&lp_amount_in.to_le_bytes());
     data.extend_from_slice(&min_amount_out.to_le_bytes());
 
+    let mut metas = vec![
+        AccountMeta::new_readonly(owner.key(), true),
+        AccountMeta::new(receiving_account.key(), false),
+        AccountMeta::new(lp_token_account.key(), false),
+        AccountMeta::new_readonly(transfer_authority.key(), false),
+        AccountMeta::new_readonly(perpetuals.key(), false),
+        AccountMeta::new(pool.key(), false),
+        AccountMeta::new(custody.key(), false),
+        AccountMeta::new_readonly(custody_doves_price.key(), false),
+        AccountMeta::new_readonly(custody_pythnet_price.key(), false),
+        AccountMeta::new(custody_token_account.key(), false),
+        AccountMeta::new(lp_token_mint.key(), false),
+        AccountMeta::new_readonly(token_program.key(), false),
+        AccountMeta::new_readonly(event_authority.key(), false),
+        AccountMeta::new_readonly(perp_program.key(), false),
+    ];
+    let mut infos = vec![
+        owner.clone(),
+        receiving_account.clone(),
+        lp_token_account.clone(),
+        transfer_authority.clone(),
+        perpetuals.clone(),
+        pool.clone(),
+        custody.clone(),
+        custody_doves_price.clone(),
+        custody_pythnet_price.clone(),
+        custody_token_account.clone(),
+        lp_token_mint.clone(),
+        token_program.clone(),
+        event_authority.clone(),
+        perp_program.clone(),
+    ];
+    for a in aum_accounts {
+        metas.push(AccountMeta::new_readonly(a.key(), false));
+        infos.push(a.clone());
+    }
+
     invoke_signed(
-        &Instruction {
-            program_id: perp_program.key(),
-            accounts: vec![
-                AccountMeta::new(owner.key(), true),
-                AccountMeta::new(receiving_account.key(), false),
-                AccountMeta::new(lp_token_account.key(), false),
-                AccountMeta::new_readonly(transfer_authority.key(), false),
-                AccountMeta::new(perpetuals.key(), false),
-                AccountMeta::new(pool.key(), false),
-                AccountMeta::new(custody.key(), false),
-                AccountMeta::new_readonly(custody_oracle.key(), false),
-                AccountMeta::new(custody_token_account.key(), false),
-                AccountMeta::new(lp_token_mint.key(), false),
-                AccountMeta::new_readonly(token_program.key(), false),
-            ],
-            data,
-        },
-        &[
-            owner.clone(),
-            receiving_account.clone(),
-            lp_token_account.clone(),
-            transfer_authority.clone(),
-            perpetuals.clone(),
-            pool.clone(),
-            custody.clone(),
-            custody_oracle.clone(),
-            custody_token_account.clone(),
-            lp_token_mint.clone(),
-            token_program.clone(),
-        ],
+        &Instruction { program_id: perp_program.key(), accounts: metas, data },
+        &infos,
         signer_seeds,
     )?;
     Ok(())

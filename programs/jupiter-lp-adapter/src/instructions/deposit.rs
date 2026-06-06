@@ -107,6 +107,14 @@ pub struct Deposit<'info> {
     #[account(address = USDC_MINT)]
     pub usdc_mint_account: UncheckedAccount<'info>,
 
+    /// CHECK: Jupiter Perps event-CPI authority PDA [b"__event_authority"] @ PERP
+    #[account(
+        seeds = [cpi::EVENT_AUTHORITY_SEED],
+        bump,
+        seeds::program = PERP_PROGRAM_ID,
+    )]
+    pub event_authority: UncheckedAccount<'info>,
+
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, anchor_spl::associated_token::AssociatedToken>,
 }
@@ -143,14 +151,22 @@ pub fn handler<'info>(ctx: Context<'info, Deposit<'info>>, amount: u64) -> Resul
     // Step 2: JLP balance before addLiquidity to compute delta.
     let jlp_before = ctx.accounts.authority_jlp_ata.amount;
 
-    // Step 3: read oracle from remaining_accounts[0], fall back to perp_program as placeholder.
-    let oracle = ctx
+    // Step 3: remaining_accounts layout:
+    //   [0] USDC custody doves price, [1] USDC custody pythnet price (named slots),
+    //   [2..] AUM accounts: [custody, doves, pythnet] for every pool custody.
+    let doves = ctx
         .remaining_accounts
         .first()
         .cloned()
         .unwrap_or_else(|| ctx.accounts.perp_program.to_account_info());
+    let pythnet = ctx
+        .remaining_accounts
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| ctx.accounts.perp_program.to_account_info());
+    let aum = ctx.remaining_accounts.get(2..).unwrap_or(&[]);
 
-    // Step 4: CPI addLiquidity — authority signs, USDC from authority ATA, JLP to authority ATA.
+    // Step 4: CPI addLiquidity2 — authority signs, USDC from authority ATA, JLP to authority ATA.
     cpi::cpi_add_liquidity(
         &ctx.accounts.perp_program,
         &ctx.accounts.jlp_authority,
@@ -160,10 +176,13 @@ pub fn handler<'info>(ctx: Context<'info, Deposit<'info>>, amount: u64) -> Resul
         &ctx.accounts.perpetuals,
         &ctx.accounts.pool,
         &ctx.accounts.custody,
-        &oracle,
+        &doves,
+        &pythnet,
         &ctx.accounts.custody_token_account,
         &ctx.accounts.jlp_mint,
         &ctx.accounts.token_program,
+        &ctx.accounts.event_authority,
+        aum,
         amount,
         0, // no slippage protection in the reference adapter
         signer_seeds,
