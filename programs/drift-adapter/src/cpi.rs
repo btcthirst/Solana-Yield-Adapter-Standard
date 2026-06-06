@@ -35,17 +35,18 @@ pub const DISC_REMOVE_IF_STAKE: [u8; 8] = [0x80, 0xa6, 0x8e, 0x09, 0xfe, 0xbb, 0
 // ── Byte-offset readers ──────────────────────────────────────────────────────
 
 /// InsuranceFundStake layout (zero_copy repr(C), including 8-byte discriminator):
-///   [0..8]   discriminator
-///   [8..40]  authority: Pubkey
-///   [40..56] if_shares: u128
-///   [56..72] last_withdraw_request_shares: u128
-///   [72..88] if_base: u128
-///   [88..96] last_valid_ts: i64
-///   [96..104] last_withdraw_request_ts: i64
+///   [0..8]    discriminator
+///   [8..40]   authority: Pubkey
+///   [40..56]  if_shares: u128
+///   [56..72]  last_withdraw_request_shares: u128
+///   [72..88]  if_base: u128
+///   [88..96]  last_valid_ts: i64
+///   [96..104] last_withdraw_request_value: u64
+///   [104..112] last_withdraw_request_ts: i64
 const IF_SHARES_OFFSET: usize = 40;
 const IF_SHARES_END: usize = 56;                   // 40 + 16
-const LAST_WITHDRAW_REQUEST_TS_OFFSET: usize = 96;
-const LAST_WITHDRAW_REQUEST_TS_END: usize = 104;   // 96 + 8
+const LAST_WITHDRAW_REQUEST_TS_OFFSET: usize = 104;
+const LAST_WITHDRAW_REQUEST_TS_END: usize = 112;   // 104 + 8
 const TOTAL_SHARES_OFFSET: usize = 336;
 const TOTAL_SHARES_END: usize = 352;               // 336 + 16
 const UNSTAKING_PERIOD_OFFSET: usize = 384;
@@ -149,13 +150,13 @@ pub fn cpi_initialize_user_stats<'info>(
 }
 
 /// CPI: Drift `initialize_insurance_fund_stake`.
-/// Accounts (IDL order):
+/// Accounts (IDL v2.162 order):
 ///   0. spot_market          (r)
 ///   1. insurance_fund_stake (mut, init PDA — seeds: [b"insurance_fund_stake", authority, market_index_le])
 ///   2. user_stats           (mut)
-///   3. authority            (signer)
-///   4. payer                (mut, signer — same as authority)
-///   5. state                (r)
+///   3. state                (r)
+///   4. authority            (signer)
+///   5. payer                (mut, signer — same as authority)
 ///   6. rent                 (sysvar)
 ///   7. system_program
 /// Data: discriminator(8) + market_index: u16 LE
@@ -164,9 +165,9 @@ pub fn cpi_initialize_insurance_fund_stake<'info>(
     spot_market: &AccountInfo<'info>,
     insurance_fund_stake: &AccountInfo<'info>,
     user_stats: &AccountInfo<'info>,
+    state: &AccountInfo<'info>,
     authority: &AccountInfo<'info>,
     payer: &AccountInfo<'info>,
-    state: &AccountInfo<'info>,
     rent: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
     market_index: u16,
@@ -181,9 +182,9 @@ pub fn cpi_initialize_insurance_fund_stake<'info>(
                 AccountMeta::new_readonly(spot_market.key(), false),
                 AccountMeta::new(insurance_fund_stake.key(), false),
                 AccountMeta::new(user_stats.key(), false),
+                AccountMeta::new_readonly(state.key(), false),
                 AccountMeta::new_readonly(authority.key(), true),
                 AccountMeta::new(payer.key(), true),
-                AccountMeta::new_readonly(state.key(), false),
                 AccountMeta::new_readonly(rent.key(), false),
                 AccountMeta::new_readonly(system_program.key(), false),
             ],
@@ -193,9 +194,9 @@ pub fn cpi_initialize_insurance_fund_stake<'info>(
             spot_market.clone(),
             insurance_fund_stake.clone(),
             user_stats.clone(),
+            state.clone(),
             authority.clone(),
             payer.clone(),
-            state.clone(),
             rent.clone(),
             system_program.clone(),
         ],
@@ -204,26 +205,28 @@ pub fn cpi_initialize_insurance_fund_stake<'info>(
 }
 
 /// CPI: Drift `add_insurance_fund_stake`.
-/// Accounts (IDL order):
+/// Accounts (IDL v2.162 order):
 ///   0. state                (r)
 ///   1. spot_market          (mut)
-///   2. insurance_fund_vault (mut — IF vault, destination of staked USDC)
-///   3. insurance_fund_stake (mut)
-///   4. user_stats           (mut)
-///   5. authority            (signer — user, propagated from Dispatcher)
-///   6. spot_market_vault    (mut — spot market collateral vault, for revenue settle)
-///   7. user_token_account   (mut — user's USDC ATA, source)
-///   8. token_program        (r)
+///   2. insurance_fund_stake (mut)
+///   3. user_stats           (mut)
+///   4. authority            (signer — user, propagated from Dispatcher)
+///   5. spot_market_vault    (mut — spot market collateral vault, for revenue settle)
+///   6. insurance_fund_vault (mut — IF vault, destination of staked USDC)
+///   7. drift_signer         (r — Drift vault authority PDA)
+///   8. user_token_account   (mut — user's USDC ATA, source)
+///   9. token_program        (r)
 /// Data: discriminator(8) + market_index: u16 LE + amount: u64 LE
 pub fn cpi_add_insurance_fund_stake<'info>(
     drift_program: &AccountInfo<'info>,
     state: &AccountInfo<'info>,
     spot_market: &AccountInfo<'info>,
-    insurance_fund_vault: &AccountInfo<'info>,
     insurance_fund_stake: &AccountInfo<'info>,
     user_stats: &AccountInfo<'info>,
     authority: &AccountInfo<'info>,
     spot_market_vault: &AccountInfo<'info>,
+    insurance_fund_vault: &AccountInfo<'info>,
+    drift_signer: &AccountInfo<'info>,
     user_token_account: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     market_index: u16,
@@ -239,11 +242,12 @@ pub fn cpi_add_insurance_fund_stake<'info>(
             accounts: vec![
                 AccountMeta::new_readonly(state.key(), false),
                 AccountMeta::new(spot_market.key(), false),
-                AccountMeta::new(insurance_fund_vault.key(), false),
                 AccountMeta::new(insurance_fund_stake.key(), false),
                 AccountMeta::new(user_stats.key(), false),
                 AccountMeta::new_readonly(authority.key(), true),
                 AccountMeta::new(spot_market_vault.key(), false),
+                AccountMeta::new(insurance_fund_vault.key(), false),
+                AccountMeta::new_readonly(drift_signer.key(), false),
                 AccountMeta::new(user_token_account.key(), false),
                 AccountMeta::new_readonly(token_program.key(), false),
             ],
@@ -252,11 +256,12 @@ pub fn cpi_add_insurance_fund_stake<'info>(
         &[
             state.clone(),
             spot_market.clone(),
-            insurance_fund_vault.clone(),
             insurance_fund_stake.clone(),
             user_stats.clone(),
             authority.clone(),
             spot_market_vault.clone(),
+            insurance_fund_vault.clone(),
+            drift_signer.clone(),
             user_token_account.clone(),
             token_program.clone(),
         ],
@@ -265,45 +270,48 @@ pub fn cpi_add_insurance_fund_stake<'info>(
 }
 
 /// CPI: Drift `request_remove_insurance_fund_stake`.
-/// Initiates the cooldown countdown. Drift records `lastWithdrawRequestShares = if_shares`
-/// and `lastWithdrawRequestTs = now` in the InsuranceFundStake account.
-/// Accounts (IDL order):
-///   0. state                (r)
-///   1. spot_market          (mut)
-///   2. insurance_fund_stake (mut)
-///   3. user_stats           (mut)
-///   4. authority            (signer)
-/// Data: discriminator(8) + market_index: u16 LE
+/// Initiates the cooldown countdown. Drift converts `amount` (USDC tokens) into
+/// IF shares via `vault_amount_to_if_shares` and records the request on the
+/// InsuranceFundStake account.
+/// Accounts (IDL v2.162 order):
+///   0. spot_market          (mut)
+///   1. insurance_fund_stake (mut)
+///   2. user_stats           (mut)
+///   3. authority            (signer)
+///   4. insurance_fund_vault (mut — read for amount→shares conversion)
+/// Data: discriminator(8) + market_index: u16 LE + amount: u64 LE (USDC tokens)
 pub fn cpi_request_remove_insurance_fund_stake<'info>(
     drift_program: &AccountInfo<'info>,
-    state: &AccountInfo<'info>,
     spot_market: &AccountInfo<'info>,
     insurance_fund_stake: &AccountInfo<'info>,
     user_stats: &AccountInfo<'info>,
     authority: &AccountInfo<'info>,
+    insurance_fund_vault: &AccountInfo<'info>,
     market_index: u16,
+    amount: u64,
 ) -> Result<()> {
     let mut data = DISC_REQUEST_REMOVE.to_vec();
     data.extend_from_slice(&market_index.to_le_bytes());
+    data.extend_from_slice(&amount.to_le_bytes());
 
     invoke(
         &Instruction {
             program_id: drift_program.key(),
             accounts: vec![
-                AccountMeta::new_readonly(state.key(), false),
                 AccountMeta::new(spot_market.key(), false),
                 AccountMeta::new(insurance_fund_stake.key(), false),
                 AccountMeta::new(user_stats.key(), false),
                 AccountMeta::new_readonly(authority.key(), true),
+                AccountMeta::new(insurance_fund_vault.key(), false),
             ],
             data,
         },
         &[
-            state.clone(),
             spot_market.clone(),
             insurance_fund_stake.clone(),
             user_stats.clone(),
             authority.clone(),
+            insurance_fund_vault.clone(),
         ],
     )?;
     Ok(())
@@ -312,13 +320,13 @@ pub fn cpi_request_remove_insurance_fund_stake<'info>(
 /// CPI: Drift `remove_insurance_fund_stake`.
 /// Executes the withdrawal after the cooldown has elapsed.
 /// Drift transfers USDC from insurance_fund_vault → user_token_account.
-/// Accounts (IDL order):
+/// Accounts (IDL v2.162 order):
 ///   0. state                (r)
 ///   1. spot_market          (mut)
-///   2. insurance_fund_vault (mut — source of withdrawn USDC)
-///   3. insurance_fund_stake (mut)
-///   4. user_stats           (mut)
-///   5. authority            (signer)
+///   2. insurance_fund_stake (mut)
+///   3. user_stats           (mut)
+///   4. authority            (signer)
+///   5. insurance_fund_vault (mut — source of withdrawn USDC)
 ///   6. drift_signer         (r — Drift's vault authority PDA)
 ///   7. user_token_account   (mut — destination, user's USDC ATA)
 ///   8. token_program        (r)
@@ -327,10 +335,10 @@ pub fn cpi_remove_insurance_fund_stake<'info>(
     drift_program: &AccountInfo<'info>,
     state: &AccountInfo<'info>,
     spot_market: &AccountInfo<'info>,
-    insurance_fund_vault: &AccountInfo<'info>,
     insurance_fund_stake: &AccountInfo<'info>,
     user_stats: &AccountInfo<'info>,
     authority: &AccountInfo<'info>,
+    insurance_fund_vault: &AccountInfo<'info>,
     drift_signer: &AccountInfo<'info>,
     user_token_account: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
@@ -345,10 +353,10 @@ pub fn cpi_remove_insurance_fund_stake<'info>(
             accounts: vec![
                 AccountMeta::new_readonly(state.key(), false),
                 AccountMeta::new(spot_market.key(), false),
-                AccountMeta::new(insurance_fund_vault.key(), false),
                 AccountMeta::new(insurance_fund_stake.key(), false),
                 AccountMeta::new(user_stats.key(), false),
                 AccountMeta::new_readonly(authority.key(), true),
+                AccountMeta::new(insurance_fund_vault.key(), false),
                 AccountMeta::new_readonly(drift_signer.key(), false),
                 AccountMeta::new(user_token_account.key(), false),
                 AccountMeta::new_readonly(token_program.key(), false),
@@ -358,10 +366,10 @@ pub fn cpi_remove_insurance_fund_stake<'info>(
         &[
             state.clone(),
             spot_market.clone(),
-            insurance_fund_vault.clone(),
             insurance_fund_stake.clone(),
             user_stats.clone(),
             authority.clone(),
+            insurance_fund_vault.clone(),
             drift_signer.clone(),
             user_token_account.clone(),
             token_program.clone(),

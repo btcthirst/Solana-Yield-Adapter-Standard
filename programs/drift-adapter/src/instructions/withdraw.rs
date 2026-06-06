@@ -94,21 +94,21 @@ pub fn handler<'info>(ctx: Context<'info, Withdraw<'info>>, _shares: u64) -> Res
             &ctx.accounts.drift_program,
             &ctx.accounts.state,
             &ctx.accounts.spot_market,
-            &ctx.accounts.insurance_fund_vault,
             &ctx.accounts.insurance_fund_stake,
             &ctx.accounts.user_stats,
             &ctx.accounts.owner,
+            &ctx.accounts.insurance_fund_vault,
             &ctx.accounts.drift_signer,
             &ctx.accounts.user_token_account,
             &ctx.accounts.token_program,
             MARKET_INDEX,
         )?;
 
-        let shares_removed = pos.withdrawal_request_shares;
-        pos.if_shares = pos
-            .if_shares
-            .checked_sub(shares_removed)
-            .unwrap_or(0);
+        // Read the real remaining shares from Drift rather than assuming the full
+        // requested amount was removed (amount→shares conversion floors).
+        let remaining = cpi::read_if_shares(&ctx.accounts.insurance_fund_stake)?;
+        let shares_removed = pos.if_shares.saturating_sub(remaining);
+        pos.if_shares = remaining;
         pos.pending_withdrawal = false;
         pos.withdrawal_request_shares = 0;
         pos.withdrawal_request_ts = 0;
@@ -121,14 +121,31 @@ pub fn handler<'info>(ctx: Context<'info, Withdraw<'info>>, _shares: u64) -> Res
         // ── Step 1: initiate cooldown ────────────────────────────────────────
         require!(pos.if_shares > 0, AdapterError::InsufficientShares);
 
+        // Drift's request_remove takes a USDC *token* amount and converts it to
+        // IF shares internally via vault_amount_to_if_shares (floor). Compute the
+        // full current value of the position; flooring twice guarantees the
+        // resulting n_shares never exceeds our actual if_shares.
+        let total_shares = cpi::read_total_shares(&ctx.accounts.spot_market)?;
+        require!(total_shares > 0, AdapterError::ProtocolError);
+        let vault_amount =
+            cpi::read_token_account_amount(&ctx.accounts.insurance_fund_vault)? as u128;
+        let amount = pos
+            .if_shares
+            .checked_mul(vault_amount)
+            .and_then(|v| v.checked_div(total_shares))
+            .and_then(|v| u64::try_from(v).ok())
+            .ok_or(error!(AdapterError::Overflow))?;
+        require!(amount > 0, AdapterError::InsufficientShares);
+
         cpi::cpi_request_remove_insurance_fund_stake(
             &ctx.accounts.drift_program,
-            &ctx.accounts.state,
             &ctx.accounts.spot_market,
             &ctx.accounts.insurance_fund_stake,
             &ctx.accounts.user_stats,
             &ctx.accounts.owner,
+            &ctx.accounts.insurance_fund_vault,
             MARKET_INDEX,
+            amount,
         )?;
 
         let cooldown = cpi::read_unstaking_period(&ctx.accounts.spot_market)?;

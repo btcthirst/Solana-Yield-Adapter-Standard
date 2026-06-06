@@ -265,6 +265,7 @@ describe("Drift Adapter", () => {
         insuranceFundStake,
         userStats,
         spotMarketVault,
+        driftSigner: DRIFT_SIGNER,
         userTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
         driftProgram: DRIFT_PROGRAM_ID,

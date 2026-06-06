@@ -1,7 +1,7 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 
 use crate::{
-    cpi::{self, DRIFT_PROGRAM_ID, DRIFT_STATE, MARKET_INDEX, USDC_IF_VAULT, USDC_SPOT_MARKET},
+    cpi::{self, DRIFT_PROGRAM_ID, DRIFT_SIGNER, DRIFT_STATE, MARKET_INDEX, USDC_IF_VAULT, USDC_SPOT_MARKET},
     error::AdapterError,
     state::DriftAdapterPosition,
 };
@@ -66,6 +66,10 @@ pub struct Deposit<'info> {
     )]
     pub spot_market_vault: UncheckedAccount<'info>,
 
+    /// CHECK: Drift vault authority PDA; validated by address constraint
+    #[account(address = DRIFT_SIGNER)]
+    pub drift_signer: UncheckedAccount<'info>,
+
     /// CHECK: user's USDC ATA (source of funds for staking)
     #[account(mut)]
     pub user_token_account: UncheckedAccount<'info>,
@@ -87,11 +91,12 @@ pub fn handler(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         &ctx.accounts.drift_program,
         &ctx.accounts.state,
         &ctx.accounts.spot_market,
-        &ctx.accounts.insurance_fund_vault,
         &ctx.accounts.insurance_fund_stake,
         &ctx.accounts.user_stats,
         &ctx.accounts.owner,
         &ctx.accounts.spot_market_vault,
+        &ctx.accounts.insurance_fund_vault,
+        &ctx.accounts.drift_signer,
         &ctx.accounts.user_token_account,
         &ctx.accounts.token_program,
         MARKET_INDEX,
