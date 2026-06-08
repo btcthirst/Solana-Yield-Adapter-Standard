@@ -128,6 +128,23 @@ jobs:
             cat surfpool.log || true
             exit 1
           fi
+          # getHealth flips to ok before the `deployment` runbook finishes
+          # deploying the workspace programs. Running the tests too early hits
+          # InvalidProgramForExecution, so wait for the runbook to complete.
+          deployed=""
+          for i in $(seq 1 60); do
+            if grep -q "Runbook 'deployment' execution completed" surfpool.log 2>/dev/null; then
+              echo "programs deployed after ~$((i * 2))s"
+              deployed=1
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$deployed" ]; then
+            echo "::error::program deployment did not complete within 120s. Log below:"
+            cat surfpool.log || true
+            exit 1
+          fi
 
       - name: Run mainnet-fork tests
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository

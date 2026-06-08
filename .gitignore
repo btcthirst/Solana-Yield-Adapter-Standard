@@ -10,5 +10,8 @@ build/
 
 # Surfpool
 .surfpool/
-txtx.yml
-runbooks/
+# txtx.yml + runbooks/ are committed: surfpool auto-runs the `deployment`
+# runbook on startup to deploy the workspace programs onto the fork, so CI needs
+# them. The subgraph runbook is a local-only introspection aid (needs the studio
+# subgraph service) and is not required by the fork tests.
+runbooks/deployment/subgraphs.localnet.tx

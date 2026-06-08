@@ -1,0 +1,85 @@
+################################################################
+# Manage Solana-Yield-Adapter-Standard deployment through Crypto Infrastructure as Code
+################################################################
+
+addon "svm" {
+    rpc_api_url = input.rpc_api_url
+    network_id = input.network_id
+}
+
+action "deploy_dispatcher" "svm::deploy_program" {
+    description = "Deploy dispatcher program"
+    program = svm::get_program_from_anchor_project("dispatcher") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
+
+action "deploy_drift_adapter" "svm::deploy_program" {
+    description = "Deploy drift_adapter program"
+    program = svm::get_program_from_anchor_project("drift_adapter") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
+
+action "deploy_jupiter_lp_adapter" "svm::deploy_program" {
+    description = "Deploy jupiter_lp_adapter program"
+    program = svm::get_program_from_anchor_project("jupiter_lp_adapter") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
+
+action "deploy_kamino_adapter" "svm::deploy_program" {
+    description = "Deploy kamino_adapter program"
+    program = svm::get_program_from_anchor_project("kamino_adapter") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
+
+action "deploy_maple_adapter" "svm::deploy_program" {
+    description = "Deploy maple_adapter program"
+    program = svm::get_program_from_anchor_project("maple_adapter") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
+
+action "deploy_marginfi_adapter" "svm::deploy_program" {
+    description = "Deploy marginfi_adapter program"
+    program = svm::get_program_from_anchor_project("marginfi_adapter") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
+
+action "deploy_registry" "svm::deploy_program" {
+    description = "Deploy registry program"
+    program = svm::get_program_from_anchor_project("registry") 
+    authority = signer.authority
+    payer = signer.payer
+    // Optional: if you want to deploy the program via a cheatcode when targeting a Surfnet, set `instant_surfnet_deployment = true`
+    // Deploying via a cheatcode will write the program data directly to the program account, rather than sending transactions.
+    // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
+    // instant_surfnet_deployment = true
+}
