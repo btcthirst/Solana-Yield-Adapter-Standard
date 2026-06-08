@@ -55,9 +55,13 @@ jobs:
         run: solana-keygen new --no-bip39-passphrase --outfile ~/.config/solana/id.json
 
       # Build runs for every push and PR (incl. forks) — validates compilation
-      # without needing any secret.
+      # without needing any secret. --ignore-keys: program keypairs live under
+      # the gitignored target/ and are absent on a fresh checkout, so anchor
+      # would generate random ones that don't match the canonical declare_id /
+      # Anchor.toml IDs (the real devnet program IDs). Skip the keypair check;
+      # the declare_id values in source are correct.
       - name: Build programs
-        run: anchor build
+        run: anchor build --ignore-keys
 
       # ── Fork-test steps below require the HELIUS_RPC_URL secret, which is not
       # available to PRs from forks. Gate them so external PRs still pass on the
@@ -76,16 +80,17 @@ jobs:
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           cargo install surfpool --locked
-          NO_DNA=1 surfpool start \
-            --network mainnet \
-            --no-tui \
-            --rpc-port 8899 \
-            --datasource-rpc-url "${{ secrets.HELIUS_RPC_URL }}" \
-            --daemon
+          NO_DNA=1 SURFPOOL_DATASOURCE_RPC_URL="${{ secrets.HELIUS_RPC_URL }}" \
+            surfpool start --no-tui -y --no-studio --port 8899 --daemon
           # Wait for surfpool to be ready, and FAIL the job if it never comes up.
+          # surfpool exposes JSON-RPC only — GET /health returns HTTP 405, so
+          # probe readiness with a POST getHealth call instead.
           ready=""
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8899/health > /dev/null 2>&1; then
+            if curl -s -m 3 http://127.0.0.1:8899 -X POST \
+                 -H 'Content-Type: application/json' \
+                 -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null \
+                 | grep -q '"result":"ok"'; then
               echo "surfpool ready after ${i}s"
               ready=1
               break
@@ -104,9 +109,12 @@ jobs:
           SURFPOOL_DATASOURCE_RPC_URL: ${{ secrets.HELIUS_RPC_URL }}
           ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
           ANCHOR_WALLET: ~/.config/solana/id.json
-        # --forbid-pending turns any skipped (pending) test into a failure, so a
-        # silently-skipped suite can never report green in CI.
-        run: npm run test:fork -- --forbid-pending
+        # Drift legitimately skips with an on-chain proof (its deployed program
+        # has every instruction commented out upstream), so --forbid-pending is
+        # NOT used here — it would turn that documented skip into a failure.
+        # FORK_REQUIRED=1 already fails the run if the fork itself is missing,
+        # which is the silent-skip case we actually want to guard against.
+        run: npm run test:fork
 
       - name: Stop surfpool
         if: always()

@@ -72,12 +72,12 @@ check-tools: ## Verify required toolchain is on PATH
 
 .PHONY: build
 build: ## anchor build — compile all programs + generate IDLs
-	anchor build
+	anchor build --ignore-keys
 
 .PHONY: build-one
 build-one: ## anchor build a single PROGRAM=<name> (e.g. drift_adapter)
 	@[ -n "$(PROGRAM)" ] || { echo "set PROGRAM=<name>, e.g. make build-one PROGRAM=drift_adapter"; exit 1; }
-	anchor build -p $(PROGRAM)
+	anchor build --ignore-keys -p $(PROGRAM)
 
 .PHONY: sbf
 sbf: ## cargo build-sbf — fast program-only build (no IDL), PROGRAM optional
