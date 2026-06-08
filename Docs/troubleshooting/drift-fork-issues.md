@@ -25,6 +25,36 @@
 
 Програма Drift: `dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH` (адреса не змінювалась).
 
+### 📌 Сорс-пруф (першоджерело — репозиторій Drift)
+
+Перевірено напряму в `drift-labs/protocol-v2` (гілка `master`), 2026-06-08:
+
+- **Коміт:** [`comment out all ixs` (#2174)](https://github.com/drift-labs/protocol-v2/pull/2174) —
+  2026-04-01, тіло: *«comment out all ixs» + «fix: build errors no ixs»*. Це **остання змістовна
+  зміна** `programs/drift` (після нього — лише бамп версії `v2.162.0`).
+  Історія: <https://github.com/drift-labs/protocol-v2/commits/master/programs/drift>
+- **Сам код:** [`programs/drift/src/lib.rs`](https://github.com/drift-labs/protocol-v2/blob/master/programs/drift/src/lib.rs)
+  (2258 рядків) — **активна рівно ОДНА `pub fn`** (`program_entry`, кастомний entrypoint),
+  **245 закоментованих `pub fn`** інструкцій (увесь `#[program]` вимкнено, напр. `// pub fn initialize_user...`).
+- **Кастомний entrypoint** обслуговує лише 2 нативні oracle-операції під префіксом `FF FF FF FF`
+  (`disc 0` → `handle_update_mm_oracle_native`, `disc 1` → `handle_update_amm_spread_adjustment_native`);
+  усе інше падає в `else → entry()`, де anchor-диспетчер тепер не має жодної інструкції → `101`:
+
+  ```rust
+  if let [0xFF, 0xFF, 0xFF, 0xFF, discriminator, payload @ ..] = data {
+      match *discriminator {
+          0 => handle_update_mm_oracle_native(accounts, payload),
+          1 => handle_update_amm_spread_adjustment_native(accounts, payload),
+          _ => Err(ProgramError::InvalidInstructionData.into()),
+      }
+  } else {
+      entry(program_id, accounts, data) // ← #[program] із 0 активних інструкцій → 101
+  }
+  ```
+
+Це знімає будь-який сумнів: блокер — навмисне рішення Drift у сорсі, а не зміна дискримінаторів
+чи артефакт surfpool/датасорсу. Заміряний `101` (== сміттєвий диск) — пряме слідство цього коду.
+
 ---
 
 ## ✅ ROOT CAUSE (доведено емпірично, 2026-06-06)
