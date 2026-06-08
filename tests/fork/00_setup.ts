@@ -80,18 +80,55 @@ type AccountValue = {
   rentEpoch: number;
 };
 
-async function fetchFromMainnet(pubkey: string): Promise<AccountValue | null> {
-  const res = await fetch(MAINNET_RPC!, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0", id: 1,
-      method: "getAccountInfo",
-      params: [pubkey, { encoding: "base64" }],
-    }),
-  });
-  const json = (await res.json()) as { result?: { value: AccountValue | null } };
-  return json.result?.value ?? null;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Fetch a single account from the datasource RPC, retrying on transient
+ * failures (HTTP 429 / 5xx, network errors, JSON-RPC errors). Free RPC tiers
+ * rate-limit bursts, and on a fast CI runner the 30 sequential clones fire in
+ * a couple of seconds — without retries a throttled response is silently
+ * treated as "account not found" and trips the FORK_REQUIRED guard.
+ *
+ * Returns `undefined` if every attempt failed (transient), or the account
+ * value (possibly `null` for a genuinely non-existent account).
+ */
+async function fetchFromMainnet(
+  pubkey: string,
+): Promise<AccountValue | null | undefined> {
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(MAINNET_RPC!, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          method: "getAccountInfo",
+          params: [pubkey, { encoding: "base64" }],
+        }),
+      });
+      if (!res.ok) {
+        // 429 / 5xx — back off and retry.
+        if (attempt < MAX_ATTEMPTS) { await sleep(250 * 2 ** (attempt - 1)); continue; }
+        return undefined;
+      }
+      const json = (await res.json()) as {
+        result?: { value: AccountValue | null };
+        error?: unknown;
+      };
+      if (json.error) {
+        if (attempt < MAX_ATTEMPTS) { await sleep(250 * 2 ** (attempt - 1)); continue; }
+        return undefined;
+      }
+      // A well-formed response: result.value is the account (or null if the
+      // account truly does not exist).
+      return json.result?.value ?? null;
+    } catch {
+      if (attempt < MAX_ATTEMPTS) { await sleep(250 * 2 ** (attempt - 1)); continue; }
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 async function isSurfpoolHealthy(): Promise<boolean> {
@@ -149,7 +186,7 @@ before(async function () {
     return;
   }
 
-  this.timeout(120_000);
+  this.timeout(180_000);
 
   // In CI, surfpool itself must be reachable before we try to clone state.
   if (FORK_REQUIRED && !(await isSurfpoolHealthy())) {
@@ -164,7 +201,12 @@ before(async function () {
   for (const [pubkey, label] of Object.entries(ACCOUNTS_TO_CLONE)) {
     try {
       const account = await fetchFromMainnet(pubkey);
-      if (!account) {
+      if (account === undefined) {
+        console.log(`    FAIL  ${label} (${pubkey.slice(0, 8)}…) — RPC unreachable/throttled after retries`);
+        fail++;
+        continue;
+      }
+      if (account === null) {
         console.log(`    skip  ${label} (${pubkey.slice(0, 8)}…) — not found on mainnet`);
         fail++;
         continue;
@@ -176,6 +218,8 @@ before(async function () {
       console.warn(`    error ${label}: ${err}`);
       fail++;
     }
+    // Gentle pacing to avoid tripping free-tier RPC per-second rate limits.
+    await sleep(120);
   }
 
   console.log(`  Done: ${ok} cloned, ${fail} skipped/failed.\n`);
