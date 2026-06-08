@@ -215,19 +215,25 @@ Each adapter defines its own internal share unit. The Dispatcher tracks only the
 > skips with a documented proof. It will pass unchanged once Drift re-enables
 > its program. See `Docs/troubleshooting/drift-fork-issues.md`.
 
-> **Known limitation — Maple adapter:** Unlike the other four adapters, the Maple adapter accepts **syrupUSDC** directly rather than USDC. syrupUSDC is Maple's yield-bearing token and must be acquired externally before calling `deposit` (via Orca/Jupiter swap on Solana, or via Chainlink CCIP bridge from Ethereum). This breaks the uniform USDC-in/USDC-out abstraction for this adapter. A future version could wrap an Orca CPI to automate the swap; the current implementation prioritises correctness of the custodial model over interface uniformity.
+> **Design note — Maple adapter (USDC in/out via Orca):** Maple has **no native
+> deposit program on Solana** — syrupUSDC is a Chainlink-CCIP bridge token whose
+> mint/redeem happens on Ethereum (verified on mainnet: the program controlling
+> the syrupUSDC pool is the CCIP token-pool, instruction `LockOrBurnTokens`). A
+> literal "deposit into Maple" CPI is therefore impossible on Solana. To keep the
+> uniform USDC-in/USDC-out interface, the adapter routes through the live Orca
+> whirlpool (`6fteKNvM…`, syrupUSDC/USDC): `deposit` swaps USDC → syrupUSDC and
+> custodies it; `withdraw` swaps syrupUSDC → USDC and pays the user. The yield is
+> syrupUSDC's NAV appreciation (≈ 1.17 USDC/syrupUSDC at writing).
 >
-> **NAV oracle — Maple `current_value`:** The NAV is read from the canonical
-> `MAPLE_POOL_STATE` account (identity enforced by an `address` constraint;
-> passing any other account fails with `InvalidPoolState`). The account's byte
-> layout (`total_assets_usdc @ 8`, `total_syrup_supply @ 16`) is **not yet
-> verified against mainnet**. When the data cannot be parsed into a sane NAV
-> (account not yet populated by CCIP, or unverified layout), `current_value`
-> returns a **conservative 1.0 floor** — syrupUSDC is yield-bearing so true NAV
-> is always ≥ 1.0, meaning the floor never *overstates* value — and emits a
-> `msg!` log (`"NAV oracle unavailable — using conservative 1.0 floor"`) so a
-> client can distinguish a fallback from a verified reading. Verifying the
-> on-chain offsets and removing the fallback is tracked as follow-up work.
+> Implications: (1) entry/exit incur the pool's swap fee (0.01%) plus price
+> impact, so a round trip returns slightly less than deposited; (2) min-out is
+> derived **on-chain** from the pool's current `sqrt_price` with a 1% slippage
+> floor, so the interface stays `deposit(amount)` with no client slippage arg;
+> (3) `current_value` prices custodied syrupUSDC against the same whirlpool
+> `sqrt_price` (the real secondary-market price) — there is no separate NAV
+> oracle to verify. All whirlpool accounts (pool, vaults, oracle, mints, program)
+> are pinned by `address` constraints; the three tick arrays are client-supplied
+> and validated by Orca. Swaps use Orca's `swap_v2` instruction.
 
 ---
 

@@ -4,7 +4,10 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount},
 };
 
-use crate::{cpi::SYRUP_USDC_MINT, state::MapleAdapterPosition};
+use crate::{
+    cpi::{SYRUP_USDC_MINT, USDC_MINT},
+    state::MapleAdapterPosition,
+};
 
 #[derive(Accounts)]
 pub struct InitializePosition<'info> {
@@ -22,16 +25,15 @@ pub struct InitializePosition<'info> {
     )]
     pub adapter_position: Account<'info, MapleAdapterPosition>,
 
-    /// Virtual authority PDA — no data; signs token transfers on behalf of the position.
-    /// CHECK: PDA derivation validated by seeds constraint
+    /// Virtual authority PDA — no data; owns the custody ATAs and signs swaps.
+    /// CHECK: PDA derivation validated by seeds constraint.
     #[account(
         seeds = [MapleAdapterPosition::AUTH_SEED, owner.key().as_ref()],
         bump,
     )]
     pub maple_authority: UncheckedAccount<'info>,
 
-    /// syrupUSDC ATA for `maple_authority`. Created here.
-    /// Holds syrupUSDC on behalf of the user for the lifetime of the position.
+    /// syrupUSDC ATA for `maple_authority`. Created here — holds the position.
     #[account(
         init,
         payer = owner,
@@ -40,9 +42,22 @@ pub struct InitializePosition<'info> {
     )]
     pub authority_syrup_ata: Account<'info, TokenAccount>,
 
+    /// USDC ATA for `maple_authority`. Created here — swap staging account.
+    #[account(
+        init,
+        payer = owner,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = maple_authority,
+    )]
+    pub authority_usdc_ata: Account<'info, TokenAccount>,
+
     /// syrupUSDC mint. Validated against SYRUP_USDC_MINT constant.
     #[account(address = SYRUP_USDC_MINT)]
     pub syrup_usdc_mint: Account<'info, Mint>,
+
+    /// USDC mint. Validated against USDC_MINT constant.
+    #[account(address = USDC_MINT)]
+    pub usdc_mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,

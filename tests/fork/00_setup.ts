@@ -67,8 +67,9 @@ const ACCOUNTS_TO_CLONE: Record<string, string> = {
   "Fgc93D641F8N2d1xLjQ4jmShuD3GE3BsCXA56KBQbF5u": "Jupiter custody D pythnet",
 
   // ── Maple ─────────────────────────────────────────────────────────────────
+  // syrupUSDC mint (needed by initialize_position). The whirlpool, its vaults,
+  // oracle and tick arrays are lazily fetched by surfpool on first read.
   "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj": "syrupUSDC mint",
-  "HrTBpF3LqSxXnjnYdR4htnBLyMHNZ6eNaDZGPundvHbm": "Maple pool state",
 };
 
 type AccountValue = {

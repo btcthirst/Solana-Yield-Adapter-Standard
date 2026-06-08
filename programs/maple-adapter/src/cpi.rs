@@ -4,132 +4,193 @@ use anchor_lang::solana_program::{
     program::invoke_signed,
 };
 
-/// syrupUSDC SPL-token mint on Solana mainnet.
-/// Confirmed via Orca pool and Maple Finance docs (June 2025).
+use crate::error::AdapterError;
+
+// ─── Mints ────────────────────────────────────────────────────────────────────
+
+/// syrupUSDC SPL-token mint on Solana mainnet (6 decimals).
+/// syrupUSDC is Maple's yield-bearing token, bridged to Solana via Chainlink CCIP.
+/// There is NO native Maple deposit program on Solana — exposure is obtained by
+/// buying/selling syrupUSDC on the secondary market (the Orca whirlpool below).
 pub const SYRUP_USDC_MINT: Pubkey = pubkey!("AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj");
 
-/// Maple pool state account on Solana.
-/// Stores NAV data pushed from Ethereum via Chainlink CCIP.
-/// Layout (Anchor account, 8-byte discriminator):
-///   [0..8]   discriminator
-///   [8..16]  total_assets_usdc: u64  (USDC lamports, 6 decimals)
-///   [16..24] total_syrup_supply: u64 (syrupUSDC lamports, 6 decimals)
-/// NAV = total_assets_usdc / total_syrup_supply, scaled to 1e6
-/// NOTE: offsets need on-chain verification against mainnet account data.
-pub const MAPLE_POOL_STATE: Pubkey = pubkey!("HrTBpF3LqSxXnjnYdR4htnBLyMHNZ6eNaDZGPundvHbm");
+/// USDC mint (6 decimals).
+pub const USDC_MINT: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
-/// Conservative NAV floor: 1.0 USDC per syrupUSDC.
-/// syrupUSDC is yield-bearing, so true NAV is always >= 1.0; using this floor
-/// when the oracle is unreadable understates value but never overstates it.
-pub const NAV_ONE: u64 = 1_000_000; // 1e6
+// ─── Orca Whirlpool: syrupUSDC (token A) / USDC (token B) ───────────────────────
+//
+// Verified on mainnet (2026-06): live, actively-traded concentrated-liquidity pool.
+//   tickSpacing = 1, fee = 0.01%, price ≈ 1.168 USDC per syrupUSDC (= live NAV).
+// All swaps route through `swap_v2` (token-2022-compatible variant); both mints are
+// classic SPL so both token programs are the standard SPL Token program.
 
-/// Upper sanity bound for a parsed NAV: 1000.0 USDC per syrupUSDC.
-/// A value outside [NAV_ONE, NAV_MAX] indicates a wrong/unverified layout.
-pub const NAV_MAX: u64 = 1_000_000_000_000;
+pub const WHIRLPOOL_PROGRAM: Pubkey = pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
+pub const SYRUP_WHIRLPOOL: Pubkey = pubkey!("6fteKNvMdv7tYmBoJHhj1jx6rHcEwC6RdSEmVpyS613J");
+/// Whirlpool vault for token A (syrupUSDC).
+pub const WHIRLPOOL_VAULT_A: Pubkey = pubkey!("FM2RuqFYo9umA1yc5FyQn6pSDZJZ1MXAdaekJZ4dQCvi");
+/// Whirlpool vault for token B (USDC).
+pub const WHIRLPOOL_VAULT_B: Pubkey = pubkey!("Fw6Xr45rBBrXbWJd5ZbSg44kacrKRLef4rHkZ8gWC5Ab");
+/// Whirlpool oracle PDA: [b"oracle", whirlpool] @ WHIRLPOOL_PROGRAM. Writable in swap_v2.
+pub const WHIRLPOOL_ORACLE: Pubkey = pubkey!("H7j5FQpwTUMwxrWeuyrLr5Z9oHsPFiaRqNaERVsuE1c8");
+/// SPL Memo program (required account for swap_v2; no memo is emitted).
+pub const MEMO_PROGRAM: Pubkey = pubkey!("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
-const TOTAL_ASSETS_OFFSET: usize = 8;
-const TOTAL_SUPPLY_OFFSET: usize = 16;
+/// Orca whirlpool `swap_v2` discriminator = sha256("global:swap_v2")[0..8].
+const SWAP_V2_DISC: [u8; 8] = [0x2b, 0x04, 0xed, 0x0b, 0x1a, 0xc9, 0x1e, 0x62];
 
-/// Result of reading the Maple pool NAV.
-///
-/// `is_fallback == true` means the on-chain NAV could not be parsed (account not
-/// yet populated by CCIP, or the layout offsets are unverified) and `value` is
-/// the conservative 1.0 floor. Callers should surface this to the client so a
-/// fallback value is never mistaken for a verified oracle reading.
-pub struct Nav {
-    /// USDC lamports per 1 syrupUSDC, scaled by 1e6.
-    pub value: u64,
-    /// True if `value` is the 1.0 floor rather than a parsed oracle value.
-    pub is_fallback: bool,
+/// Orca price bounds (Q64.64 sqrt price). Used as the swap's `sqrt_price_limit`;
+/// real slippage protection comes from `other_amount_threshold` (min-out).
+pub const MIN_SQRT_PRICE: u128 = 4_295_048_016;
+pub const MAX_SQRT_PRICE: u128 = 79_226_673_515_401_279_992_447_579_055;
+
+/// Max slippage tolerated by the in-adapter swap (1.00%). The min-out is derived
+/// on-chain from the pool's current price, so the interface stays `deposit(amount)`
+/// / `withdraw(shares)` with no extra client-supplied slippage argument.
+pub const MAX_SLIPPAGE_BPS: u64 = 100;
+const BPS_DENOM: u128 = 10_000;
+
+/// Q64.64 fixed-point one.
+const Q64: u128 = 1u128 << 64;
+
+/// Byte offset of `sqrt_price` (u128) inside the Whirlpool account. Verified on mainnet.
+const SQRT_PRICE_OFFSET: usize = 65;
+/// End offset of `sqrt_price` (SQRT_PRICE_OFFSET + 16).
+const SQRT_PRICE_END: usize = 81;
+/// Byte offset of `amount` (u64) inside an SPL token account.
+const TOKEN_AMOUNT_OFFSET: usize = 64;
+/// End offset of the token `amount` field (TOKEN_AMOUNT_OFFSET + 8).
+const TOKEN_AMOUNT_END: usize = 72;
+
+// ─── Pool reads ─────────────────────────────────────────────────────────────────
+
+/// Read the whirlpool's current `sqrt_price` (Q64.64). The caller must have pinned
+/// `whirlpool` to `SYRUP_WHIRLPOOL` via an address constraint.
+pub fn read_sqrt_price(whirlpool: &AccountInfo) -> Result<u128> {
+    let data = whirlpool
+        .try_borrow_data()
+        .map_err(|_| error!(AdapterError::InvalidPoolState))?;
+    require!(data.len() >= SQRT_PRICE_END, AdapterError::InvalidPoolState);
+    let bytes: [u8; 16] = data[SQRT_PRICE_OFFSET..SQRT_PRICE_END]
+        .try_into()
+        .map_err(|_| error!(AdapterError::InvalidPoolState))?;
+    Ok(u128::from_le_bytes(bytes))
 }
 
-impl Nav {
-    fn fallback() -> Self {
-        Self { value: NAV_ONE, is_fallback: true }
-    }
-    fn oracle(value: u64) -> Self {
-        Self { value, is_fallback: false }
-    }
+/// Read the `amount` field of an SPL token account.
+pub fn read_token_amount(token_acct: &AccountInfo) -> Result<u64> {
+    let data = token_acct
+        .try_borrow_data()
+        .map_err(|_| error!(AdapterError::ProtocolError))?;
+    require!(data.len() >= TOKEN_AMOUNT_END, AdapterError::ProtocolError);
+    let bytes: [u8; 8] = data[TOKEN_AMOUNT_OFFSET..TOKEN_AMOUNT_END]
+        .try_into()
+        .map_err(|_| error!(AdapterError::ProtocolError))?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
-/// Read current NAV from the Maple pool state account.
-///
-/// The caller is responsible for validating that `pool_state` is the canonical
-/// `MAPLE_POOL_STATE` (see the `address` constraint in `current_value`); this
-/// helper only parses the data. Returns a [`Nav`] whose `is_fallback` flag
-/// distinguishes a verified oracle reading from the conservative 1.0 floor used
-/// when the account is unreadable or its contents fail sanity checks.
-pub fn read_nav(pool_state: &AccountInfo) -> Nav {
-    let data = match pool_state.try_borrow_data() {
-        Ok(d) => d,
-        Err(_) => return Nav::fallback(),
-    };
+// ─── Price math (token A = syrupUSDC, token B = USDC, both 6 decimals) ───────────
+//
+// price (USDC per syrupUSDC) = (sqrt_price / 2^64)^2.
 
-    if data.len() < TOTAL_SUPPLY_OFFSET + 8 {
-        return Nav::fallback();
-    }
-
-    let total_assets = u64::from_le_bytes(
-        data[TOTAL_ASSETS_OFFSET..TOTAL_ASSETS_OFFSET + 8]
-            .try_into()
-            .unwrap(),
-    );
-    let total_supply = u64::from_le_bytes(
-        data[TOTAL_SUPPLY_OFFSET..TOTAL_SUPPLY_OFFSET + 8]
-            .try_into()
-            .unwrap(),
-    );
-
-    if total_supply == 0 || total_assets == 0 {
-        return Nav::fallback();
-    }
-
-    // nav = total_assets * 1e6 / total_supply
-    // Both values have 6 decimals, so this gives USDC per syrupUSDC × 1e6.
-    let nav = match (total_assets as u128)
-        .checked_mul(NAV_ONE as u128)
-        .and_then(|v| v.checked_div(total_supply as u128))
-        .and_then(|v| u64::try_from(v).ok())
-    {
-        Some(v) => v,
-        None => return Nav::fallback(),
-    };
-
-    // Sanity: NAV must be within [1.0, 1000.0] USDC per syrupUSDC. A value
-    // outside this range means the layout offsets are wrong/unverified.
-    if nav < NAV_ONE || nav > NAV_MAX {
-        Nav::fallback()
-    } else {
-        Nav::oracle(nav)
-    }
+/// USDC value of `shares` syrupUSDC lamports at the given sqrt price.
+/// value = shares * sqrt^2 / 2^128, computed in two shift-down steps to stay in u128.
+pub fn syrup_to_usdc(shares: u64, sqrt_price: u128) -> Option<u64> {
+    let t = (shares as u128).checked_mul(sqrt_price)?.checked_div(Q64)?;
+    let v = t.checked_mul(sqrt_price)?.checked_div(Q64)?;
+    u64::try_from(v).ok()
 }
 
-/// Convert syrupUSDC shares to USDC value using current NAV.
-/// value_usdc = shares * nav / 1e6
-pub fn shares_to_usdc(shares: u64, nav: u64) -> Option<u64> {
-    let value = (shares as u128)
-        .checked_mul(nav as u128)?
-        .checked_div(NAV_ONE as u128)?;
-    u64::try_from(value).ok()
+/// Estimated syrupUSDC lamports obtainable for `usdc` lamports at the given sqrt price.
+/// out = usdc * 2^128 / sqrt^2.
+pub fn usdc_to_syrup(usdc: u64, sqrt_price: u128) -> Option<u64> {
+    let t = (usdc as u128).checked_mul(Q64)?.checked_div(sqrt_price)?;
+    let s = t.checked_mul(Q64)?.checked_div(sqrt_price)?;
+    u64::try_from(s).ok()
 }
 
-/// Convert USDC amount to estimated syrupUSDC shares using current NAV.
-/// shares = usdc * 1e6 / nav
-pub fn usdc_to_shares(usdc: u64, nav: u64) -> Option<u64> {
-    let shares = (usdc as u128)
-        .checked_mul(NAV_ONE as u128)?
-        .checked_div(nav as u128)?;
-    u64::try_from(shares).ok()
+/// Apply a slippage floor: `amount * (10000 - bps) / 10000`.
+pub fn apply_slippage(amount: u64, bps: u64) -> u64 {
+    let keep = BPS_DENOM.saturating_sub(bps as u128);
+    ((amount as u128).saturating_mul(keep) / BPS_DENOM) as u64
 }
 
-// sha256("global:transfer")[0..8] — SPL Token transfer discriminator via raw invoke.
-// We use anchor_spl's token::transfer instead; this module exposes the raw CPI helpers
-// for the SPL Token program transfer instruction (for UncheckedAccount contexts).
+// ─── Orca swap_v2 CPI ────────────────────────────────────────────────────────────
 
-pub const SPL_TOKEN_TRANSFER_DISC: u8 = 3; // SPL Token instruction: Transfer
+/// CPI into Orca `swap_v2`. `ordered` must be exactly the 15 accounts in canonical
+/// swap_v2 order:
+///   [0] token_program_a   [1] token_program_b   [2] memo_program
+///   [3] token_authority(signer)  [4] whirlpool
+///   [5] token_mint_a      [6] token_mint_b
+///   [7] token_owner_account_a    [8] token_vault_a
+///   [9] token_owner_account_b    [10] token_vault_b
+///   [11] tick_array_0  [12] tick_array_1  [13] tick_array_2  [14] oracle
+#[allow(clippy::too_many_arguments)]
+pub fn whirlpool_swap_v2<'info>(
+    whirlpool_program: &AccountInfo<'info>,
+    ordered: &[AccountInfo<'info>],
+    amount: u64,
+    other_amount_threshold: u64,
+    sqrt_price_limit: u128,
+    amount_specified_is_input: bool,
+    a_to_b: bool,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    require!(ordered.len() == 15, AdapterError::ProtocolError);
+
+    let mut data = SWAP_V2_DISC.to_vec();
+    data.extend_from_slice(&amount.to_le_bytes());
+    data.extend_from_slice(&other_amount_threshold.to_le_bytes());
+    data.extend_from_slice(&sqrt_price_limit.to_le_bytes());
+    data.push(amount_specified_is_input as u8);
+    data.push(a_to_b as u8);
+    data.push(0u8); // remaining_accounts_info: Option<..> = None
+
+    // (index, is_writable, is_signer)
+    let spec: [(usize, bool, bool); 15] = [
+        (0, false, false),  // token_program_a
+        (1, false, false),  // token_program_b
+        (2, false, false),  // memo_program
+        (3, false, true),   // token_authority
+        (4, true, false),   // whirlpool
+        (5, false, false),  // token_mint_a
+        (6, false, false),  // token_mint_b
+        (7, true, false),   // token_owner_account_a
+        (8, true, false),   // token_vault_a
+        (9, true, false),   // token_owner_account_b
+        (10, true, false),  // token_vault_b
+        (11, true, false),  // tick_array_0
+        (12, true, false),  // tick_array_1
+        (13, true, false),  // tick_array_2
+        (14, true, false),  // oracle
+    ];
+    let accounts: Vec<AccountMeta> = spec
+        .iter()
+        .map(|&(i, w, s)| AccountMeta {
+            pubkey: ordered[i].key(),
+            is_signer: s,
+            is_writable: w,
+        })
+        .collect();
+
+    invoke_signed(
+        &Instruction {
+            program_id: whirlpool_program.key(),
+            accounts,
+            data,
+        },
+        ordered,
+        signer_seeds,
+    )?;
+    Ok(())
+}
+
+// ─── SPL Token transfer (raw CPI for UncheckedAccount contexts) ──────────────────
+
+/// SPL Token `Transfer` instruction tag.
+pub const SPL_TOKEN_TRANSFER_DISC: u8 = 3;
 
 /// CPI: SPL Token `transfer` — move `amount` tokens from `src` to `dst`.
-/// `authority` must be a signer (PDA → invoke_signed).
+/// `authority` signs (a user wallet via propagated signature, or a PDA via seeds).
 pub fn cpi_token_transfer<'info>(
     token_program: &AccountInfo<'info>,
     src: &AccountInfo<'info>,

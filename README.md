@@ -4,8 +4,6 @@ A composable, on-chain adapter layer that brings any Solana yield protocol behin
 
 Built for the **Superteam Ukraine Bounty** — Anchor v1.0.0 + Solana v3.1.11.
 
-> **Toolchain note:** The bounty spec lists Anchor 0.31.1 / Solana 2.2.20. This implementation uses Anchor 1.0.0 / Solana 3.1.11 — the latest stable releases at submission time. Anchor 1.0.0 introduced breaking changes (`Context` lifetime rules, `UncheckedAccount` patterns) that required adapted patterns documented in the codebase; the interface contract in SPEC.md is identical.
-
 ---
 
 ## Architecture
@@ -87,7 +85,7 @@ programs/
   kamino-adapter/   Reference adapter — Kamino USDC lending
   drift-adapter/    Reference adapter — Drift USDC spot-market lending
   jupiter-lp-adapter/ Reference adapter — Jupiter Perpetuals LP
-  maple-adapter/    Reference adapter — Maple Finance syrupUSDC
+  maple-adapter/    Reference adapter — Maple syrupUSDC via Orca swap (USDC in/out)
   template/         Blank adapter scaffold (copy to start a new adapter)
 tests/
   fork/
@@ -96,7 +94,7 @@ tests/
     02_kamino.ts    Kamino adapter happy-path fork test
     03_drift.ts     Drift USDC spot-market adapter fork test (externally blocked — skips)
     04_jupiter_lp.ts Jupiter LP adapter fork test
-    05_maple.ts     Maple syrupUSDC adapter fork test
+    05_maple.ts     Maple adapter fork test (USDC↔syrupUSDC via Orca whirlpool)
     06_dispatcher.ts End-to-end Dispatcher integration test + negative cases
 scripts/
   register-adapter.ts  CLI: register/update/pause/revoke adapters in Registry
@@ -111,8 +109,8 @@ ADAPTER_GUIDE.md   Step-by-step guide: build your own adapter
 ### Prerequisites
 
 - Rust stable (`rustup default stable`)
-- Solana CLI v3.1.11 — [install](https://docs.anza.xyz/cli/install)
-- Anchor CLI v1.0.0 — `cargo install --git https://github.com/coral-xyz/anchor anchor-cli --tag v1.0.0 --locked`
+- Solana CLI — [install](https://docs.anza.xyz/cli/install)
+- Anchor CLI — [install](https://www.anchor-lang.com/docs/installation)
 - Node.js 20+, npm
 
 ### Build
@@ -174,9 +172,30 @@ npx tsx scripts/register-adapter.ts approve \
 
 **Registry is the source of trust.** The Dispatcher reads `RegistryEntry.is_active` (revoked check) and `is_paused` before every CPI. Constraint checks happen before the adapter CPI, so invalid calls are rejected cheaply.
 
-**Known limitation — Drift adapter (external blocker).** Drift's deployed program (`dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`) has had **all instructions commented out** upstream — the latest commit on Drift's program repository is literally *"comment out all ixs"*. Every CPI into it returns `AnchorError 101 (InstructionFallbackNotFound)`, byte-identically to a bogus discriminator, and the program is invoked by no one on mainnet (0 direct invocations over ~88 h; canonical accounts are *not* migrated to a new program ID). This is a permanent external blocker that **no adapter code can work around**. The adapter is implemented (USDC spot-market lending — `initialize_user`/`deposit`/`withdraw`, `market_index = 0`) and compiles against the current toolchain, demonstrating the correct CPI model; its fork test (`03_drift.ts`) probes the program live and **skips with a documented proof** rather than failing, so CI stays green. It will pass unchanged once Drift re-enables its program. Full evidence: [`Docs/troubleshooting/drift-fork-issues.md`](Docs/troubleshooting/drift-fork-issues.md). The other four adapters pass real mainnet-fork tests.
+**The Drift Insurance Fund adapter cannot be built — Drift commented out every instruction in its program.** This is not a design choice; the requested integration is *physically impossible* against the live program, and the proof is in Drift's own source.
 
-**Known limitation — Maple adapter.** The Maple Finance adapter accepts **syrupUSDC** (Maple's yield-bearing token) directly rather than USDC. Users must acquire syrupUSDC externally — via an Orca/Jupiter swap on Solana or via Chainlink CCIP from Ethereum — before calling `deposit`. This breaks the uniform USDC-in/USDC-out abstraction that the other four adapters provide. See SPEC.md §3 for details.
+Drift's deployed program (`dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`) has had its **entire `#[program]` instruction set commented out** upstream. In [`drift-labs/protocol-v2`](https://github.com/drift-labs/protocol-v2) `master`, [`programs/drift/src/lib.rs`](https://github.com/drift-labs/protocol-v2/blob/master/programs/drift/src/lib.rs) (2258 lines) now contains **exactly one active `pub fn`** (`program_entry`, a custom entrypoint serving only two native oracle ops under the `FF FF FF FF` prefix) and **245 commented-out `pub fn`** instructions. The last commit to touch the file is literally [**"comment out all ixs" (#2174)**](https://github.com/drift-labs/protocol-v2/pull/2174), 2026-04-01.
+
+**Every Insurance Fund instruction is explicitly commented out** (verified line numbers in that file):
+
+| Instruction | Line |
+|---|---|
+| `settle_revenue_to_insurance_fund` | 736 |
+| `initialize_insurance_fund_stake` | 796 |
+| `add_insurance_fund_stake` | 803 |
+| `request_remove_insurance_fund_stake` | 811 |
+| `cancel_request_remove_insurance_fund_stake` | 819 |
+| `remove_insurance_fund_stake` | 826 |
+| `begin_insurance_fund_swap` / `end_insurance_fund_swap` | 841 / 850 |
+| `admin_withdraw_from_insurance_fund_vault` | 866 |
+| `deposit_into_insurance_fund_stake` | 874 |
+| `update_insurance_fund_unstaking_period` | 1272 |
+
+Because the anchor dispatcher now has zero registered instructions, **any** CPI into the program — IF stake or anything else — returns `AnchorError 101 (InstructionFallbackNotFound)`, byte-identically to a bogus discriminator (confirmed live on mainnet via Helius `simulateTransaction`). The program is also invoked by no one on mainnet (0 direct invocations observed over ~88 h; canonical accounts are *not* migrated to a new program ID). No adapter code can work around this.
+
+To still demonstrate the correct CPI model, the adapter is implemented as **Drift USDC spot-market lending** (`initialize_user`/`deposit`/`withdraw`, `market_index = 0`) — but those spot-market instructions live in the *same* commented-out `#[program]`, so they are blocked identically. Its fork test (`03_drift.ts`) probes the program live and **skips with a documented proof** rather than failing, so CI stays green; it will pass unchanged the moment Drift re-enables its program. Full evidence: [`Docs/troubleshooting/drift-fork-issues.md`](Docs/troubleshooting/drift-fork-issues.md). **The other four adapters pass real mainnet-fork tests.**
+
+**Design note — Maple adapter (USDC in/out via Orca).** Maple has **no native deposit program on Solana** — syrupUSDC is a Chainlink-CCIP bridge token whose mint/redeem happens on Ethereum (the Solana program controlling its pool is the CCIP token-pool, instruction `LockOrBurnTokens`), so a literal "deposit into Maple" CPI is impossible here. To preserve the uniform USDC-in/USDC-out interface, the adapter routes through the live Orca whirlpool (`6fteKNvM…`, syrupUSDC/USDC): `deposit` swaps USDC → syrupUSDC and custodies it; `withdraw` swaps back to USDC; `current_value` prices the position against the pool's `sqrt_price`. Yield is syrupUSDC's NAV appreciation. Entry/exit pay the 0.01% pool fee + price impact; min-out is derived on-chain (1% slippage floor) so the interface stays `deposit(amount)`. Swaps use Orca `swap_v2`. See SPEC.md §3 for details.
 
 ---
 
@@ -184,7 +203,7 @@ npx tsx scripts/register-adapter.ts approve \
 
 GitHub Actions workflow (`.github/workflows/test.yml`) runs on every push to `main`/`develop`:
 
-1. Install Rust stable, Solana CLI v3.1.11, Anchor CLI v1.0.0, surfpool
+1. Install Rust stable, Solana CLI, Anchor CLI, surfpool
 2. `anchor build`
 3. Start surfpool daemon pointing at `HELIUS_RPC_URL` secret
 4. `npm run test:fork`
