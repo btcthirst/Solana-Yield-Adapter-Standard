@@ -111,6 +111,7 @@
 ## Корисний контекст
 
 - Drift: `dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`; state `5zpq7DvB…`; USDC spot market `6gMq3mRC…`; USDC IF vault `2CqkQvYx…` (актуальний, звірено з `spot_market.insurance_fund.vault`).
-- ⚠️ Адаптерна константа `DRIFT_SIGNER = JCNCMFXo5M5qwUPg2Utu1u6YWp3MbygxqBsBeXXJfrw` — у docs це адреса **Drift Vaults**, не обов'язково `state.signer`. Звірити з `State.signer` перед v3-роботою.
+- ✅ Адаптерна константа `DRIFT_SIGNER = JCNCMFXo5M5qwUPg2Utu1u6YWp3MbygxqBsBeXXJfrw` — **ВЕРИФІКОВАНО наживо (2026-06-08, Helius):** дорівнює `State.signer` (offset 104 у State-акаунті `5zpq7DvB…`) і є канонічним PDA `[b"drift_signer"] @ DRIFT_PROGRAM_ID`. Константа правильна (попередній сумнів про «адресу Drift Vaults» знято).
+- ✅ Решта констант звірені з мейннетом (2026-06-08): `spot_market_vault` PDA `[b"spot_market_vault", 0u16] = GXWqPpjQpdz7KZw9p7f5PX2eGxHAhvpNXiviFkAB8zXg` (mint = USDC; == `SpotMarket.vault` @104 у `6gMq3mRC…`); USDC spot market `.mint` = USDC, `.pubkey` self-consistent; `DRIFT_STATE` owned by Drift. Усі account/PDA/program константи коректні — блокером лишається ТІЛЬКИ gutted-програма (101), не дані. Диски `sha256("global:<name>")` = опублікований IDL (проти задеплоєної програми незвірювані, бо всі ix закоментовані).
 - Запуск форку (потрібен робочий mainnet RPC, публічний api.mainnet-beta не годиться — surfpool падає; publicnode не віддає декодованих tx; робить Helius):
   `NO_DNA=1 SURFPOOL_DATASOURCE_RPC_URL=<helius> surfpool start --no-tui -y --port 8899`
