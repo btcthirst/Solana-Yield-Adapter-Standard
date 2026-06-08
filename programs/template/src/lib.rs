@@ -7,10 +7,12 @@ pub mod state;
 
 use instructions::*;
 
-// TODO: replace with your program's deployed address:
+// Placeholder ID — matches the bundled target/deploy/template_adapter-keypair.json
+// so a fresh `anchor build` succeeds out of the box. Replace with your own before
+// deploying:
 //   solana-keygen new --outfile target/deploy/my_adapter-keypair.json
-//   solana-keygen pubkey target/deploy/my_adapter-keypair.json
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+//   anchor keys sync   (updates this declare_id! and Anchor.toml)
+declare_id!("6TiEx46An5whVbruUqyMxYJmCmkUJrGPrtBtuM6N7NyR");
 
 #[program]
 pub mod template_adapter {
