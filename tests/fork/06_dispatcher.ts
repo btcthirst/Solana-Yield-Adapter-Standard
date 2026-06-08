@@ -89,6 +89,26 @@ async function fundTokenAccount(
   if (json.error) throw new Error(`surfnet_setAccount: ${JSON.stringify(json.error)}`);
 }
 
+async function rpcCall(url: string, method: string, params: any[]): Promise<any> {
+  const res = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  return ((await res.json()) as any).result;
+}
+
+// Zero out an account on the surfpool so Anchor's `init` can re-create it.
+// System program create_account fails if the target has lamports > 0 or data.
+async function wipeAccount(rpcUrl: string, pubkey: PublicKey): Promise<void> {
+  await rpcCall(rpcUrl, "surfnet_setAccount", [pubkey.toBase58(), {
+    lamports: 0,
+    data: "",
+    owner: SystemProgram.programId.toBase58(),
+    executable: false,
+    rentEpoch: 0,
+  }]);
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MARGINFI_PROGRAM_ID = new PublicKey("MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA");
@@ -212,6 +232,10 @@ describe("Dispatcher Integration", () => {
     destinationTokenAccount = getAssociatedTokenAddressSync(USDC_MINT, owner.publicKey);
 
     // ── Bootstrap Registry ────────────────────────────────────────────────────
+    // registryState/registryEntry PDAs have no owner seed so they survive across
+    // surfpool sessions. Wipe them so Anchor's `init` can re-create them fresh.
+    await wipeAccount(RPC_URL, registryState);
+    await wipeAccount(RPC_URL, registryEntry);
 
     await registryProgram.methods
       .initializeRegistry(owner.publicKey)

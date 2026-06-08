@@ -100,16 +100,18 @@ async function rpcCall(url: string, method: string, params: any[]): Promise<any>
 }
 
 async function refreshFromMainnet(localRpc: string, pubkeys: PublicKey[]): Promise<void> {
-  const mainnet = process.env.SURFPOOL_DATASOURCE_RPC_URL;
-  if (!mainnet) return;
   // surfpool Clock unix_timestamp (i64 at offset 32 of the Clock sysvar).
   const clk = await rpcCall(localRpc, "getAccountInfo",
     ["SysvarC1ock11111111111111111111111111111111", { encoding: "base64" }]);
   const clkBuf = Buffer.from(clk.value.data[0], "base64");
   const freshTs = clkBuf.readBigInt64LE(32) + 60n;
 
+  const mainnet = process.env.SURFPOOL_DATASOURCE_RPC_URL;
+  // Fetch from mainnet if available; otherwise use local clone (data is still correct,
+  // only the publish timestamp is stale — we patch it to clock+60 either way).
+  const source = mainnet ?? localRpc;
   const fetched = await Promise.all(pubkeys.map(async (pk) =>
-    ({ pk, v: (await rpcCall(mainnet, "getAccountInfo", [pk.toBase58(), { encoding: "base64" }]))?.value })));
+    ({ pk, v: (await rpcCall(source, "getAccountInfo", [pk.toBase58(), { encoding: "base64" }]))?.value })));
   await Promise.all(fetched.map(async ({ pk, v }) => {
     if (!v) return;
     const buf = Buffer.from(v.data[0], "base64");
