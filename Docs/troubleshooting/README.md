@@ -11,13 +11,13 @@ Post-mortem проблем, що спливли при прогоні mainnet-fo
 | Kamino | ✅ 4/4 (V2 farms, 8 блокерів) | [kamino](kamino-fork-issues.md) |
 | Jupiter LP | ✅ 4/4 (V2, 6 блокерів) | [jupiter-lp](jupiter-lp-fork-issues.md) |
 | Dispatcher e2e | ✅ 8/8 | [dispatcher-and-maple](dispatcher-and-maple-fork-issues.md) |
-| Drift IF | ❌ заблоковано | [drift](drift-fork-issues.md) |
+| Drift (USDC spot) | ❌ зовнішній блокер | [drift](drift-fork-issues.md) |
 
-**5 із 6 suite зелені (24 тести).** Drift — відкритий (deployed-програма розійшлася з публічним IDL для init-інструкцій).
+**5 із 6 suite зелені (24 тести).** Drift заблокований ззовні: у задеплоєному Drift-проґрамі **всі інструкції закоментовані** (`protocol-v2` PR #2174, «comment out all ixs»), тож **будь-який** CPI повертає `AnchorError 101 (InstructionFallbackNotFound)`. Це не наша помилка й не «змінені дискримінатори» — інструкцій просто немає. Тест скіпається з on-chain доказом і пройде без змін, щойно Drift увімкне програму.
 
 ## Класи проблем (повторювані по адаптерах)
 
-1. **Застарілі дискримінатори** — deployed-програма на новій версії інструкцій: Kamino та Jupiter вимагали `*_v2`; Drift відхиляє навіть стандартний sha256 init-disc.
+1. **Застарілі дискримінатори** — deployed-програма на новій версії інструкцій: Kamino та Jupiter вимагали `*_v2`. (Drift — окремий випадок: не диски, а повністю вимкнений набір інструкцій, див. таблицю вище.)
 2. **Хибні byte-offset'и** — десеріалізація стану з чужих акаунтів: MarginFi (group 48→41, asset_share_value 88→80), Jupiter (aum_usd 180, без ratios). **Завжди звіряти offset з реальними даними акаунта, не з памʼяттю/коментарями.**
 3. **Невідповідність моделі акаунтів** — MarginFi `marginfi_account` мусить бути keypair-signer (не PDA); writable/owner-constraints у Kamino/Jupiter (redeem на authority-ATA + переказ юзеру).
 4. **Арг-кодування** — `Option<T>` у Borsh (MarginFi deposit/withdraw, Kamino/Jupiter V2 params).
