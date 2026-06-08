@@ -1,0 +1,23 @@
+[package]
+name = "jupiter-lp-adapter"
+version = "0.1.0"
+edition = "2021"
+description = "Jupiter Perpetuals LP (JLP) Adapter for Solana Yield Adapter Standard"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "jupiter_lp_adapter"
+
+[features]
+no-entrypoint = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl  = { workspace = true }
+
+[lints]
+workspace = true

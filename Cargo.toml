@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "programs/registry",
+    "programs/dispatcher",
+    "programs/marginfi-adapter",
+    "programs/kamino-adapter",
+    "programs/drift-adapter",
+    "programs/jupiter-lp-adapter",
+    "programs/maple-adapter",
+    "programs/template",
+]
+resolver = "2"
+
+[workspace.dependencies]
+anchor-lang = "1.0.0"
+anchor-spl  = "1.0.0"
+solana-program = "^3.1"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "allow" }
+
+[profile.release]
+overflow-checks = true

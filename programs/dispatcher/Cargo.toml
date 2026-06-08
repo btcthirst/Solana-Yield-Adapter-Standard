@@ -1,0 +1,23 @@
+[package]
+name = "dispatcher"
+version = "0.1.0"
+edition = "2021"
+description = "Core Dispatcher Contract for Solana Yield Adapter Standard"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "dispatcher"
+
+[features]
+no-entrypoint = []
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+registry = { path = "../registry", features = ["no-entrypoint"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,152 @@
+name: Fork Tests
+
+on:
+  # Only run on push to main (post-merge validation). Pushes to a branch that
+  # has an open PR are already covered by the pull_request run — triggering both
+  # ran the full fork suite twice in parallel against the same datasource RPC,
+  # doubling the request rate and tripping its free-tier limit.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel an in-progress run when a newer commit supersedes it (e.g. rapid
+# pushes to a PR branch), so two runs never hammer the RPC at once.
+concurrency:
+  group: fork-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANCHOR_VERSION: "1.0.0"
+  SOLANA_VERSION: "3.1.11"
+  NODE_VERSION: "20"
+  RUST_TOOLCHAIN: stable
+
+jobs:
+  fork-tests:
+    name: Mainnet-fork integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor \
+            anchor-cli --tag v${{ env.ANCHOR_VERSION }} --locked --force
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Generate local keypair
+        run: solana-keygen new --no-bip39-passphrase --outfile ~/.config/solana/id.json
+
+      # target/ is gitignored, so the program keypairs are absent on a fresh
+      # checkout. Restore the committed canonical keypairs into target/deploy
+      # BEFORE building — anchor won't overwrite existing keypair files, so the
+      # programs keep their real IDs (declare_id / Anchor.toml) and surfpool
+      # deploys each adapter at the exact address the fork tests invoke.
+      - name: Restore program keypairs
+        run: |
+          mkdir -p target/deploy
+          cp keys/*-keypair.json target/deploy/
+
+      # Build runs for every push and PR (incl. forks) — validates compilation
+      # without needing any secret.
+      - name: Build programs
+        run: anchor build
+
+      # ── Fork-test steps below require the HELIUS_RPC_URL secret, which is not
+      # available to PRs from forks. Gate them so external PRs still pass on the
+      # build step, while push / same-repo PRs run the real fork tests and fail
+      # loudly if the fork is misconfigured. ───────────────────────────────────
+
+      - name: Require fork RPC secret
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          if [ -z "${{ secrets.HELIUS_RPC_URL }}" ]; then
+            echo "::error::HELIUS_RPC_URL secret is not set — cannot run mainnet-fork tests."
+            exit 1
+          fi
+
+      - name: Start surfpool (mainnet fork)
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          # surfpool is distributed as a release binary, not a cargo crate
+          # (`cargo install surfpool` resolves to an empty library stub on
+          # crates.io). Download the prebuilt linux binary instead.
+          curl -fsSL https://github.com/txtx/surfpool/releases/latest/download/surfpool-linux-x64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin surfpool
+          surfpool --version
+          # Start detached with output captured to a log so failures are
+          # diagnosable (--daemon would swallow all output).
+          NO_DNA=1 SURFPOOL_DATASOURCE_RPC_URL="${{ secrets.HELIUS_RPC_URL }}" \
+            nohup surfpool start --no-tui -y --no-studio --port 8899 \
+            > surfpool.log 2>&1 &
+          # Wait for surfpool to be ready, and FAIL the job if it never comes up.
+          # surfpool exposes JSON-RPC only — GET /health returns HTTP 405, so
+          # probe readiness with a POST getHealth call instead. A cold mainnet
+          # fork that deploys the local programs can take >60s on CI, so allow
+          # up to 120s (60 × 2s).
+          ready=""
+          for i in $(seq 1 60); do
+            if curl -s -m 3 http://127.0.0.1:8899 -X POST \
+                 -H 'Content-Type: application/json' \
+                 -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null \
+                 | grep -q '"result":"ok"'; then
+              echo "surfpool ready after ~$((i * 2))s"
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::surfpool did not become ready within 120s. Log below:"
+            cat surfpool.log || true
+            exit 1
+          fi
+
+      - name: Run mainnet-fork tests
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          FORK_REQUIRED: "1"
+          SURFPOOL_DATASOURCE_RPC_URL: ${{ secrets.HELIUS_RPC_URL }}
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+          ANCHOR_WALLET: ~/.config/solana/id.json
+        # Drift legitimately skips with an on-chain proof (its deployed program
+        # has every instruction commented out upstream), so --forbid-pending is
+        # NOT used here — it would turn that documented skip into a failure.
+        # FORK_REQUIRED=1 already fails the run if the fork itself is missing,
+        # which is the silent-skip case we actually want to guard against.
+        run: npm run test:fork
+
+      - name: Dump surfpool log
+        if: always()
+        run: tail -n 100 surfpool.log 2>/dev/null || echo "(no surfpool.log)"
+
+      - name: Stop surfpool
+        if: always()
+        run: pkill surfpool || true
