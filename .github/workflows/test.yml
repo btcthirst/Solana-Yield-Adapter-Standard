@@ -76,7 +76,7 @@ jobs:
             exit 1
           fi
 
-      - name: Start surfpool (mainnet fork, daemon mode)
+      - name: Start surfpool (mainnet fork)
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           # surfpool is distributed as a release binary, not a cargo crate
@@ -85,25 +85,31 @@ jobs:
           curl -fsSL https://github.com/txtx/surfpool/releases/latest/download/surfpool-linux-x64.tar.gz \
             | sudo tar -xz -C /usr/local/bin surfpool
           surfpool --version
+          # Start detached with output captured to a log so failures are
+          # diagnosable (--daemon would swallow all output).
           NO_DNA=1 SURFPOOL_DATASOURCE_RPC_URL="${{ secrets.HELIUS_RPC_URL }}" \
-            surfpool start --no-tui -y --no-studio --port 8899 --daemon
+            nohup surfpool start --no-tui -y --no-studio --port 8899 \
+            > surfpool.log 2>&1 &
           # Wait for surfpool to be ready, and FAIL the job if it never comes up.
           # surfpool exposes JSON-RPC only — GET /health returns HTTP 405, so
-          # probe readiness with a POST getHealth call instead.
+          # probe readiness with a POST getHealth call instead. A cold mainnet
+          # fork that deploys the local programs can take >60s on CI, so allow
+          # up to 120s (60 × 2s).
           ready=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -s -m 3 http://127.0.0.1:8899 -X POST \
                  -H 'Content-Type: application/json' \
                  -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' 2>/dev/null \
                  | grep -q '"result":"ok"'; then
-              echo "surfpool ready after ${i}s"
+              echo "surfpool ready after ~$((i * 2))s"
               ready=1
               break
             fi
-            sleep 1
+            sleep 2
           done
           if [ -z "$ready" ]; then
-            echo "::error::surfpool did not become ready within 30s."
+            echo "::error::surfpool did not become ready within 120s. Log below:"
+            cat surfpool.log || true
             exit 1
           fi
 
@@ -120,6 +126,10 @@ jobs:
         # FORK_REQUIRED=1 already fails the run if the fork itself is missing,
         # which is the silent-skip case we actually want to guard against.
         run: npm run test:fork
+
+      - name: Dump surfpool log
+        if: always()
+        run: tail -n 100 surfpool.log 2>/dev/null || echo "(no surfpool.log)"
 
       - name: Stop surfpool
         if: always()
