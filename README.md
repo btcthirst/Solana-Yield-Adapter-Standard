@@ -143,10 +143,17 @@ anchor build
 
 ### Run mainnet-fork tests
 
-[surfpool](https://github.com/txtx/surfpool) is required. Install:
+[surfpool](https://github.com/txtx/surfpool) is required. Install the prebuilt
+binary (see [surfpool releases](https://github.com/txtx/surfpool/releases) for
+other platforms):
 
 ```bash
-cargo install surfpool --locked
+# Linux x64
+curl -fsSL https://github.com/txtx/surfpool/releases/latest/download/surfpool-linux-x64.tar.gz \
+  | sudo tar -xz -C /usr/local/bin surfpool
+
+# macOS (Homebrew)
+brew install txtx/taps/surfpool
 ```
 
 Export a mainnet RPC endpoint (Helius, Triton, or any full node):

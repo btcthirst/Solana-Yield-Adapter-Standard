@@ -79,7 +79,12 @@ jobs:
       - name: Start surfpool (mainnet fork, daemon mode)
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          cargo install surfpool --locked
+          # surfpool is distributed as a release binary, not a cargo crate
+          # (`cargo install surfpool` resolves to an empty library stub on
+          # crates.io). Download the prebuilt linux binary instead.
+          curl -fsSL https://github.com/txtx/surfpool/releases/latest/download/surfpool-linux-x64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin surfpool
+          surfpool --version
           NO_DNA=1 SURFPOOL_DATASOURCE_RPC_URL="${{ secrets.HELIUS_RPC_URL }}" \
             surfpool start --no-tui -y --no-studio --port 8899 --daemon
           # Wait for surfpool to be ready, and FAIL the job if it never comes up.
