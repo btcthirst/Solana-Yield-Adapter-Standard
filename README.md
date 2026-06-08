@@ -234,3 +234,9 @@ GitHub Actions workflow (`.github/workflows/test.yml`) runs on every push to `ma
 ## Contributing
 
 To add a new adapter, follow [ADAPTER_GUIDE.md](ADAPTER_GUIDE.md). The interface contract is documented in [SPEC.md](SPEC.md).
+
+---
+
+## License
+
+[MIT](LICENSE) — free to use, fork, and build your own adapters on top of this standard.
