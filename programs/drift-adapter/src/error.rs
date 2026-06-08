@@ -2,14 +2,10 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum AdapterError {
-    #[msg("Cooldown period has not elapsed — call again after ready_at")]
-    CooldownActive,
-    #[msg("No pending withdrawal to complete — initiate request first")]
-    NoPendingWithdrawal,
-    #[msg("Insufficient shares in position")]
+    #[msg("Deposit amount must be greater than zero")]
+    ZeroAmount,
+    #[msg("No active deposit to withdraw")]
     InsufficientShares,
-    #[msg("Protocol-side error or unexpected account state")]
-    ProtocolError,
     #[msg("Arithmetic overflow in value computation")]
     Overflow,
 }

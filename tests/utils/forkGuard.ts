@@ -25,3 +25,26 @@ export function skipOrFail(ctx: Context, reason: string): void {
   console.log(`       ${HINT}`);
   ctx.skip();
 }
+
+/**
+ * Skip a suite that is blocked by a *permanent external* condition — i.e. the
+ * mainnet fork is healthy, but the underlying protocol cannot be exercised
+ * because of an upstream change outside this repo's control.
+ *
+ * Unlike `skipOrFail`, this ALWAYS skips (never throws), even under
+ * `FORK_REQUIRED=1`. The blocker is not a misconfiguration we can fix by
+ * supplying a working RPC, so failing CI would be misleading — the skip is the
+ * correct, honest outcome. The reason is logged loudly so it is never silent.
+ *
+ * Current sole use: the Drift adapter. Drift's deployed program
+ * `dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH` has had **all instructions
+ * commented out** upstream (latest commit on Drift's program repo:
+ * "comment out all ixs"), so every CPI returns AnchorError 101
+ * (InstructionFallbackNotFound) — byte-identically to a bogus discriminator.
+ * No adapter code can pass a real fork test against it. See
+ * Docs/troubleshooting/drift-fork-issues.md for the full proof.
+ */
+export function skipKnownBlocker(ctx: Context, reason: string): void {
+  console.log(`    ⛔ KNOWN EXTERNAL BLOCKER — skipping (not a failure): ${reason}`);
+  ctx.skip();
+}

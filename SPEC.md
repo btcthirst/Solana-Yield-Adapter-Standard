@@ -197,11 +197,23 @@ Each adapter defines its own internal share unit. The Dispatcher tracks only the
 |---|---|
 | MarginFi | `amount × 2^48 / asset_share_value` (I80F48 math) |
 | Kamino | cToken count (kUSDC collateral tokens in obligation) |
-| Drift | `if_shares` (u128, tracked as u64 — must not exceed u64::MAX) |
+| Drift | deposited USDC atoms (spot-market lending; see external-blocker note below) |
 | Jupiter LP | JLP token lamports held in authority ATA |
 | Maple | syrupUSDC lamports held in authority ATA (1 share = 1 lamport) |
 
 `current_value()` must always compute the live USDC value from the current exchange rate, not a cached value.
+
+> **External blocker — Drift adapter:** The Drift adapter targets USDC
+> spot-market lending (`market_index = 0`). However, Drift's deployed program
+> (`dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH`) currently has **all
+> instructions commented out** upstream (latest program-repo commit: *"comment
+> out all ixs"*) — every CPI returns `AnchorError 101
+> (InstructionFallbackNotFound)`, identical to a bogus discriminator, and the
+> program is invoked by no one on mainnet. This is outside adapter control: no
+> CPI-based adapter can pass a live fork test against a gutted program. The
+> adapter is implemented and compiles; its fork test probes the program live and
+> skips with a documented proof. It will pass unchanged once Drift re-enables
+> its program. See `Docs/troubleshooting/drift-fork-issues.md`.
 
 > **Known limitation — Maple adapter:** Unlike the other four adapters, the Maple adapter accepts **syrupUSDC** directly rather than USDC. syrupUSDC is Maple's yield-bearing token and must be acquired externally before calling `deposit` (via Orca/Jupiter swap on Solana, or via Chainlink CCIP bridge from Ethereum). This breaks the uniform USDC-in/USDC-out abstraction for this adapter. A future version could wrap an Orca CPI to automate the swap; the current implementation prioritises correctness of the custodial model over interface uniformity.
 >

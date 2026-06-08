@@ -1,22 +1,21 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 
 use crate::{
-    cpi::{self, DRIFT_PROGRAM_ID, DRIFT_SIGNER, DRIFT_STATE, MARKET_INDEX, USDC_IF_VAULT, USDC_SPOT_MARKET},
+    cpi::{self, DRIFT_PROGRAM_ID, DRIFT_SIGNER, DRIFT_STATE, MARKET_INDEX},
     error::AdapterError,
     state::DriftAdapterPosition,
 };
 
-/// Two-step Drift IF unstake.
+/// Withdraw USDC from the Drift spot market.
 ///
-/// First call  → `request_remove_insurance_fund_stake`: starts the cooldown,
-///               sets `pending_withdrawal = true`, returns 0 shares.
-/// Second call → `remove_insurance_fund_stake` (after cooldown elapses):
-///               transfers USDC to the user, returns shares_removed as u64 LE.
-///
+/// Single-step withdrawal (no cooldown, unlike IF staking).
 /// Called indirectly via Dispatcher CPI (`invoke`): `owner` is UncheckedAccount,
 /// signature propagated from the Dispatcher tx through the is_signer flag.
 ///
-/// All accounts must be present on both calls; only a subset is used per step.
+/// `_shares` is accepted for interface compatibility with the Dispatcher standard
+/// but ignored — always withdraws the full deposited amount.
+///
+/// Returns `deposited_amount` as u64 LE via set_return_data.
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
     /// CHECK: position owner; is_signer propagated from Dispatcher via invoke
@@ -33,20 +32,18 @@ pub struct Withdraw<'info> {
     #[account(address = DRIFT_STATE)]
     pub state: UncheckedAccount<'info>,
 
-    /// CHECK: USDC spot market; validated by address constraint (used in both steps)
-    #[account(mut, address = USDC_SPOT_MARKET)]
-    pub spot_market: UncheckedAccount<'info>,
-
-    /// CHECK: user's InsuranceFundStake PDA
+    /// Drift User PDA (sub_account_id=0). Seeds: ["user", owner, 0u16_le] @ DRIFT_PROGRAM_ID.
+    /// CHECK: PDA derivation validated by seeds constraint
     #[account(
         mut,
-        seeds = [b"insurance_fund_stake", owner.key().as_ref(), &[0u8, 0u8]],
+        seeds = [b"user", owner.key().as_ref(), &[0u8, 0u8]],
         bump,
         seeds::program = DRIFT_PROGRAM_ID,
     )]
-    pub insurance_fund_stake: UncheckedAccount<'info>,
+    pub drift_user: UncheckedAccount<'info>,
 
-    /// CHECK: user's Drift UserStats PDA
+    /// Drift UserStats PDA. Seeds: ["user_stats", owner] @ DRIFT_PROGRAM_ID.
+    /// CHECK: PDA derivation validated by seeds constraint
     #[account(
         mut,
         seeds = [b"user_stats", owner.key().as_ref()],
@@ -55,17 +52,22 @@ pub struct Withdraw<'info> {
     )]
     pub user_stats: UncheckedAccount<'info>,
 
-    // ── Step-2 only accounts (must still be passed on step 1) ────────────────
-
-    /// CHECK: USDC IF vault (source of USDC on final withdraw); validated by address constraint
-    #[account(mut, address = USDC_IF_VAULT)]
-    pub insurance_fund_vault: UncheckedAccount<'info>,
+    /// USDC spot market vault (source of withdrawn USDC).
+    /// Seeds: ["spot_market_vault", 0u16_le] @ DRIFT_PROGRAM_ID.
+    /// CHECK: PDA derivation validated by seeds constraint
+    #[account(
+        mut,
+        seeds = [b"spot_market_vault", &[0u8, 0u8]],
+        bump,
+        seeds::program = DRIFT_PROGRAM_ID,
+    )]
+    pub spot_market_vault: UncheckedAccount<'info>,
 
     /// CHECK: Drift vault authority PDA; validated by address constraint
     #[account(address = DRIFT_SIGNER)]
     pub drift_signer: UncheckedAccount<'info>,
 
-    /// CHECK: user's USDC ATA (receives withdrawn USDC on step 2)
+    /// CHECK: user's USDC ATA (receives withdrawn USDC)
     #[account(mut)]
     pub user_token_account: UncheckedAccount<'info>,
 
@@ -77,92 +79,29 @@ pub struct Withdraw<'info> {
     pub drift_program: UncheckedAccount<'info>,
 }
 
-pub fn handler<'info>(ctx: Context<'info, Withdraw<'info>>, _shares: u64) -> Result<()> {
-    let pos = &mut ctx.accounts.adapter_position;
+pub fn handler<'info>(
+    ctx: Context<'info, Withdraw<'info>>,
+    _shares: u64,
+) -> Result<()> {
+    let amount = ctx.accounts.adapter_position.deposited_amount;
+    require!(amount > 0, AdapterError::InsufficientShares);
 
-    if pos.pending_withdrawal {
-        // ── Step 2: finalize withdrawal after cooldown ───────────────────────
-        let now = Clock::get()?.unix_timestamp;
-        let cooldown = cpi::read_unstaking_period(&ctx.accounts.spot_market)?;
+    cpi::cpi_withdraw(
+        &ctx.accounts.drift_program,
+        &ctx.accounts.state,
+        &ctx.accounts.drift_user,
+        &ctx.accounts.user_stats,
+        &ctx.accounts.owner,
+        &ctx.accounts.spot_market_vault,
+        &ctx.accounts.drift_signer,
+        &ctx.accounts.user_token_account,
+        &ctx.accounts.token_program,
+        MARKET_INDEX,
+        amount,
+    )?;
 
-        require!(
-            now >= pos.withdrawal_request_ts + cooldown,
-            AdapterError::CooldownActive
-        );
+    ctx.accounts.adapter_position.deposited_amount = 0;
 
-        cpi::cpi_remove_insurance_fund_stake(
-            &ctx.accounts.drift_program,
-            &ctx.accounts.state,
-            &ctx.accounts.spot_market,
-            &ctx.accounts.insurance_fund_stake,
-            &ctx.accounts.user_stats,
-            &ctx.accounts.owner,
-            &ctx.accounts.insurance_fund_vault,
-            &ctx.accounts.drift_signer,
-            &ctx.accounts.user_token_account,
-            &ctx.accounts.token_program,
-            MARKET_INDEX,
-        )?;
-
-        // Read the real remaining shares from Drift rather than assuming the full
-        // requested amount was removed (amount→shares conversion floors).
-        let remaining = cpi::read_if_shares(&ctx.accounts.insurance_fund_stake)?;
-        let shares_removed = pos.if_shares.saturating_sub(remaining);
-        pos.if_shares = remaining;
-        pos.pending_withdrawal = false;
-        pos.withdrawal_request_shares = 0;
-        pos.withdrawal_request_ts = 0;
-
-        let shares_u64 =
-            u64::try_from(shares_removed).map_err(|_| error!(AdapterError::Overflow))?;
-
-        set_return_data(&shares_u64.to_le_bytes());
-    } else {
-        // ── Step 1: initiate cooldown ────────────────────────────────────────
-        require!(pos.if_shares > 0, AdapterError::InsufficientShares);
-
-        // Drift's request_remove takes a USDC *token* amount and converts it to
-        // IF shares internally via vault_amount_to_if_shares (floor). Compute the
-        // full current value of the position; flooring twice guarantees the
-        // resulting n_shares never exceeds our actual if_shares.
-        let total_shares = cpi::read_total_shares(&ctx.accounts.spot_market)?;
-        require!(total_shares > 0, AdapterError::ProtocolError);
-        let vault_amount =
-            cpi::read_token_account_amount(&ctx.accounts.insurance_fund_vault)? as u128;
-        let amount = pos
-            .if_shares
-            .checked_mul(vault_amount)
-            .and_then(|v| v.checked_div(total_shares))
-            .and_then(|v| u64::try_from(v).ok())
-            .ok_or(error!(AdapterError::Overflow))?;
-        require!(amount > 0, AdapterError::InsufficientShares);
-
-        cpi::cpi_request_remove_insurance_fund_stake(
-            &ctx.accounts.drift_program,
-            &ctx.accounts.spot_market,
-            &ctx.accounts.insurance_fund_stake,
-            &ctx.accounts.user_stats,
-            &ctx.accounts.owner,
-            &ctx.accounts.insurance_fund_vault,
-            MARKET_INDEX,
-            amount,
-        )?;
-
-        let cooldown = cpi::read_unstaking_period(&ctx.accounts.spot_market)?;
-        let now = Clock::get()?.unix_timestamp;
-
-        pos.pending_withdrawal = true;
-        pos.withdrawal_request_shares = pos.if_shares;
-        pos.withdrawal_request_ts = now;
-
-        msg!(
-            "IF unstake requested: ready_at={}",
-            now + cooldown
-        );
-
-        // Return 0 — shares not yet removed; Dispatcher should not decrement position.
-        set_return_data(&0u64.to_le_bytes());
-    }
-
+    set_return_data(&amount.to_le_bytes());
     Ok(())
 }
