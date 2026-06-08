@@ -6,6 +6,27 @@ Built for the **Superteam Ukraine Bounty** — Anchor v1.0.0 + Solana v3.1.11.
 
 ---
 
+## ⚠️ Mainnet-fork test status (read first)
+
+The Dispatcher, Registry, and **all five adapters compile and run against live mainnet state.** Four of the five adapters pass real mainnet-fork integration tests; the fifth (Drift) is blocked by an upstream change that no adapter code can work around. Two adapters required documented design adaptations because the requested integration does not exist natively on Solana.
+
+| Adapter | Fork test | Status |
+|---|---|---|
+| MarginFi USDC | `01_marginfi.ts` | ✅ Passes on live mainnet fork |
+| Kamino USDC | `02_kamino.ts` | ✅ Passes on live mainnet fork |
+| Jupiter LP | `04_jupiter_lp.ts` | ✅ Passes on live mainnet fork |
+| Maple syrupUSDC | `05_maple.ts` | ✅ Passes on live mainnet fork *(via Orca swap — see below)* |
+| Drift | `03_drift.ts` | ⛔ Externally blocked — skips with on-chain proof |
+| Dispatcher (e2e) | `06_dispatcher.ts` | ✅ Passes |
+
+**Drift — physically impossible against the live program.** Drift commented out *every* instruction in its deployed program ([drift-labs/protocol-v2 #2174, "comment out all ixs", 2026-04-01](https://github.com/drift-labs/protocol-v2/pull/2174); [`programs/drift/src/lib.rs`](https://github.com/drift-labs/protocol-v2/blob/master/programs/drift/src/lib.rs) now has 245 commented-out `pub fn` and one custom oracle entrypoint). Any CPI into it — Insurance Fund *or* spot-market — returns `AnchorError 101 (InstructionFallbackNotFound)`, confirmed live via Helius `simulateTransaction`. The adapter is written correctly and its fork test **skips with a documented proof instead of failing**, so it will pass unchanged the moment Drift re-enables its program. Full evidence: [`Docs/troubleshooting/drift-fork-issues.md`](Docs/troubleshooting/drift-fork-issues.md).
+
+**Maple — no native deposit program on Solana.** syrupUSDC is a Chainlink-CCIP bridge token; mint/redeem happens on Ethereum, and the Solana program controlling its pool is the CCIP token-pool (`LockOrBurnTokens`), so a literal "deposit into Maple" CPI cannot exist here. To preserve the uniform USDC-in/USDC-out interface, the adapter routes through the live Orca whirlpool (syrupUSDC/USDC) via `swap_v2`, custodies syrupUSDC, and prices the position against the pool — yield is syrupUSDC NAV appreciation. Details in [Key Design Decisions](#key-design-decisions) and [SPEC.md](SPEC.md).
+
+Both are external protocol realities, not implementation gaps — see the in-depth write-ups in [Key Design Decisions](#key-design-decisions) and [`Docs/troubleshooting/`](Docs/troubleshooting/).
+
+---
+
 ## Architecture
 
 ```

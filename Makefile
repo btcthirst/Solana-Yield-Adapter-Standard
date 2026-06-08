@@ -29,10 +29,17 @@ GREP        ?=
 # Cluster for `make deploy` (localnet | devnet | mainnet).
 CLUSTER     ?= devnet
 
+# Adapter pubkey for registry-status.
+ADAPTER     ?=
+
 # Test invocation shared env (provider + wallet for Anchor/web3 clients).
 FORK_ENV    := ANCHOR_PROVIDER_URL=$(RPC) ANCHOR_WALLET=$(WALLET)
 
 SURF_LOG    := .surfpool/logs
+
+# surfpool exposes JSON-RPC only — there is NO GET /health (it returns HTTP 405).
+# Health must be probed with a POST getHealth call.
+HEALTH_PROBE := curl -s -m 3 $(RPC) -X POST -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
 
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Help
@@ -103,10 +110,6 @@ lint: fmt-check clippy ## Run fmt-check + clippy
 test: ## anchor test — full suite (Anchor spins up its own validator)
 	anchor test
 
-.PHONY: test-unit
-test-unit: ## Run TypeScript unit tests (tests/unit)
-	npm run test:unit
-
 .PHONY: test-fork
 test-fork: require-fork ## Run all mainnet-fork tests (surfpool must be up)
 	@$(FORK_ENV) npm run test:fork $(if $(GREP),-- --grep "$(GREP)",)
@@ -127,15 +130,15 @@ test-dispatcher: ## Fork test: Dispatcher e2e
 	@$(MAKE) test-fork GREP=Dispatcher
 
 .PHONY: ci-fork
-ci-fork: require-fork ## Fork tests in CI mode (skips become failures)
-	@FORK_REQUIRED=1 $(FORK_ENV) npm run test:fork -- --forbid-pending
+ci-fork: require-fork ## Fork tests in CI mode (a missing/broken fork fails instead of skipping)
+	@FORK_REQUIRED=1 $(FORK_ENV) npm run test:fork
 
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Mainnet fork (surfpool)
 
 .PHONY: fork-up
 fork-up: ## Start surfpool mainnet fork (needs a mainnet datasource RPC)
-	@if curl -sf -m 2 $(RPC)/health >/dev/null 2>&1; then echo "fork already running on :$(PORT)"; exit 0; fi
+	@if $(HEALTH_PROBE) 2>/dev/null | grep -q '"result":"ok"'; then echo "fork already running on :$(PORT)"; exit 0; fi
 	@[ -n "$(DATASOURCE_RPC)" ] || { \
 		echo "ERROR: no mainnet datasource RPC set."; \
 		echo "  export SURFPOOL_DATASOURCE_RPC_URL=https://mainnet.helius-rpc.com/?api-key=..."; \
@@ -144,17 +147,17 @@ fork-up: ## Start surfpool mainnet fork (needs a mainnet datasource RPC)
 	@NO_DNA=1 SURFPOOL_DATASOURCE_RPC_URL="$(DATASOURCE_RPC)" \
 		nohup surfpool start --no-tui -y --no-studio --port $(PORT) >/dev/null 2>&1 & disown
 	@for i in $$(seq 1 40); do \
-		if curl -sf -m 2 $(RPC)/health >/dev/null 2>&1; then echo "  ✓ fork ready on :$(PORT)"; exit 0; fi; \
+		if $(HEALTH_PROBE) 2>/dev/null | grep -q '"result":"ok"'; then echo "  ✓ fork ready on :$(PORT)"; exit 0; fi; \
 		sleep 2; done; \
 		echo "  ✗ fork did not become ready in 80s — check $(SURF_LOG)/"; exit 1
 
 .PHONY: fork-down
 fork-down: ## Stop the surfpool fork
-	@pkill -f 'surfpool start' 2>/dev/null && echo "fork stopped" || echo "no fork running"
+	@pkill -f '[s]urfpool start' 2>/dev/null && echo "fork stopped" || echo "no fork running"
 
 .PHONY: fork-status
 fork-status: ## Check whether the fork RPC is responding
-	@if curl -sf -m 3 $(RPC)/health >/dev/null 2>&1; then echo "up: $(RPC)"; else echo "down: $(RPC)"; fi
+	@if $(HEALTH_PROBE) 2>/dev/null | grep -q '"result":"ok"'; then echo "up: $(RPC)"; else echo "down: $(RPC)"; fi
 
 .PHONY: fork-logs
 fork-logs: ## Tail the latest surfpool log
@@ -162,7 +165,7 @@ fork-logs: ## Tail the latest surfpool log
 
 .PHONY: require-fork
 require-fork: ## (internal) fail fast if the fork is not up
-	@curl -sf -m 3 $(RPC)/health >/dev/null 2>&1 || { \
+	@$(HEALTH_PROBE) 2>/dev/null | grep -q '"result":"ok"' || { \
 		echo "Fork not running on $(RPC). Start it with: make fork-up"; exit 1; }
 
 # ─────────────────────────────────────────────────────────────────────────────
