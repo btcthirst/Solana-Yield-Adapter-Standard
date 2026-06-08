@@ -70,14 +70,18 @@ check-tools: ## Verify required toolchain is on PATH
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Build
 
+.PHONY: restore-keys
+restore-keys: ## Copy committed program keypairs into target/deploy (pins canonical IDs)
+	@mkdir -p target/deploy && cp keys/*-keypair.json target/deploy/ 2>/dev/null || true
+
 .PHONY: build
-build: ## anchor build — compile all programs + generate IDLs
-	anchor build --ignore-keys
+build: restore-keys ## anchor build — compile all programs + generate IDLs
+	anchor build
 
 .PHONY: build-one
-build-one: ## anchor build a single PROGRAM=<name> (e.g. drift_adapter)
+build-one: restore-keys ## anchor build a single PROGRAM=<name> (e.g. drift_adapter)
 	@[ -n "$(PROGRAM)" ] || { echo "set PROGRAM=<name>, e.g. make build-one PROGRAM=drift_adapter"; exit 1; }
-	anchor build --ignore-keys -p $(PROGRAM)
+	anchor build -p $(PROGRAM)
 
 .PHONY: sbf
 sbf: ## cargo build-sbf — fast program-only build (no IDL), PROGRAM optional

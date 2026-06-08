@@ -54,14 +54,20 @@ jobs:
       - name: Generate local keypair
         run: solana-keygen new --no-bip39-passphrase --outfile ~/.config/solana/id.json
 
+      # target/ is gitignored, so the program keypairs are absent on a fresh
+      # checkout. Restore the committed canonical keypairs into target/deploy
+      # BEFORE building — anchor won't overwrite existing keypair files, so the
+      # programs keep their real IDs (declare_id / Anchor.toml) and surfpool
+      # deploys each adapter at the exact address the fork tests invoke.
+      - name: Restore program keypairs
+        run: |
+          mkdir -p target/deploy
+          cp keys/*-keypair.json target/deploy/
+
       # Build runs for every push and PR (incl. forks) — validates compilation
-      # without needing any secret. --ignore-keys: program keypairs live under
-      # the gitignored target/ and are absent on a fresh checkout, so anchor
-      # would generate random ones that don't match the canonical declare_id /
-      # Anchor.toml IDs (the real devnet program IDs). Skip the keypair check;
-      # the declare_id values in source are correct.
+      # without needing any secret.
       - name: Build programs
-        run: anchor build --ignore-keys
+        run: anchor build
 
       # ── Fork-test steps below require the HELIUS_RPC_URL secret, which is not
       # available to PRs from forks. Gate them so external PRs still pass on the
