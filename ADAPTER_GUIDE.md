@@ -296,7 +296,7 @@ pub fn handler<'info>(ctx: Context<'info, Withdraw<'info>>, shares: u64) -> Resu
 }
 ```
 
-**Cooldown protocols:** If the protocol does not immediately transfer funds (e.g. Drift Insurance Fund requires an unbonding period), write `set_return_data(&0u64.to_le_bytes())` and track the pending withdrawal in the position state. The Dispatcher will subtract `shares_removed = 0` from the position, leaving shares unchanged. Track the cooldown in your state; provide a second `claim` instruction the user calls after the cooldown elapses.
+**Cooldown protocols:** If the protocol does not immediately transfer funds (e.g. a staking protocol with an unbonding period), write `set_return_data(&0u64.to_le_bytes())` and track the pending withdrawal in the position state. The Dispatcher will subtract `shares_removed = 0` from the position, leaving shares unchanged. Track the cooldown in your state; provide a second `claim` instruction the user calls after the cooldown elapses.
 
 ---
 

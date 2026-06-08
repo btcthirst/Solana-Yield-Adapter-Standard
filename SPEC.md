@@ -113,7 +113,7 @@ Routes user calls to the correct adapter after verifying registry status.
 - `shares == 0` means "withdraw all".
 - Calls adapter's `withdraw(shares)`.
 - Reads `shares_removed` from return data; subtracts from `UserPosition.shares`.
-- Note: cooldown protocols (e.g. Drift IF) may return `shares_removed = 0` when a withdrawal is only queued, not executed immediately.
+- Note: cooldown protocols (e.g. a staking protocol with an unbonding period) may return `shares_removed = 0` when a withdrawal is only queued, not executed immediately. None of the five reference adapters currently use this path — the Drift adapter is single-step spot-market lending — but the contract supports it for future adapters.
 
 **`close_position(adapter: Pubkey)`**
 - Requires `UserPosition.shares == 0`.
@@ -153,7 +153,7 @@ Every adapter program **must** implement the following four instructions. The in
 #### 2.3.1 `initialize_position()`
 
 - **Called by:** the user directly (not via Dispatcher).
-- **Effect:** creates adapter-side position PDA and performs any one-time protocol setup (e.g. opening a lending account, registering for insurance fund staking).
+- **Effect:** creates adapter-side position PDA and performs any one-time protocol setup (e.g. opening a lending account / user sub-account).
 - **Return data:** none required.
 - **Must:** be idempotent or guard against double-init — calling it twice should either succeed (no-op) or fail gracefully.
 
